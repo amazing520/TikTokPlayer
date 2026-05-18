@@ -262,21 +262,23 @@ jobs:
 
 ## 📊 依赖版本
 
-| 依赖 | 版本 |
-|------|------|
-| Kotlin | 1.9.22 |
-| AGP | 8.2.2 |
-| Compose BOM | 2024.01.00 |
-| Compose Compiler | 1.5.8 |
-| Media3 ExoPlayer | 1.2.1 |
-| Coil Compose | 2.5.0 |
-| Activity Compose | 1.8.2 |
-| Lifecycle | 2.7.0 |
-| compileSdk | 34 |
-| minSdk | 24 |
-| targetSdk | 34 |
-| Gradle | 8.5 |
-| JDK | 17 |
+| 依赖 | 版本 | 备注 |
+|------|------|------|
+| Kotlin | 2.0.21 | 升级以支持 Android 16 编译 |
+| AGP | 8.7.3 | 升级以支持 compileSdk 36 |
+| Compose BOM | 2024.12.01 | 升级以兼容 Android 16 |
+| Compose Compiler | Kotlin 2.0 内置 | 通过 `kotlin.plugin.compose` 插件 |
+| Media3 ExoPlayer | 1.5.1 | 升级修复 Android 16 崩溃 |
+| Coil Compose | 2.7.0 | 升级 |
+| Coil Video | 2.7.0 | 新增：视频帧提取 |
+| Activity Compose | 1.9.3 | 升级，支持 enableEdgeToEdge() |
+| Lifecycle | 2.8.7 | 升级，LocalLifecycleOwner 新路径 |
+| Core KTX | 1.15.0 | 升级 |
+| compileSdk | 36 | Android 16 |
+| minSdk | 24 | 不变 |
+| targetSdk | 36 | Android 16 |
+| Gradle | 8.9 | 升级 |
+| JDK | 17 | 不变 |
 
 ---
 
