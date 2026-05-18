@@ -7,5 +7,6 @@ data class VideoItem(
     val uri: Uri,
     val displayName: String,
     val duration: Long, // milliseconds
-    val size: Long      // bytes
+    val size: Long,     // bytes
+    val thumbnailUri: Uri? = null // video thumbnail/content URI
 )

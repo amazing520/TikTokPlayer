@@ -83,7 +83,10 @@ class MediaStoreRepository(private val context: Context) {
                 val uri = ContentUris.withAppendedId(
                     MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id
                 )
-                videos.add(VideoItem(id, uri, name, duration, size))
+                val thumbnailUri = ContentUris.withAppendedId(
+                    MediaStore.Video.Thumbnails.EXTERNAL_CONTENT_URI, id
+                )
+                videos.add(VideoItem(id, uri, name, duration, size, thumbnailUri))
                 read++
             }
         }

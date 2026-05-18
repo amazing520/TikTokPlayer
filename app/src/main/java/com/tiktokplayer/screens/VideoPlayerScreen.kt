@@ -6,6 +6,7 @@ import android.view.WindowManager
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -19,6 +20,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -26,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -97,6 +100,11 @@ fun VideoPlayerScreen(viewModel: VideoPlayerViewModel) {
         onDispose {
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+    }
+
+    // Apply brightness changes to window
+    LaunchedEffect(viewModel.currentBrightness) {
+        viewModel.applyBrightnessToWindow(activity?.window)
     }
 
     // Lifecycle observer
@@ -194,6 +202,9 @@ private fun VideoPager(
 
         // Gesture state
         var isLongPressing by remember { mutableStateOf(false) }
+        var dragType by remember { mutableStateOf(DragType.NONE) } // LEFT=Brightness, RIGHT=Volume
+        var dragStartY by remember { mutableFloatStateOf(0f) }
+        var dragCurrentValue by remember { mutableFloatStateOf(0f) }
 
         // Clean up long-press when this composable leaves
         DisposableEffect(Unit) {
@@ -240,7 +251,49 @@ private fun VideoPager(
                         }
                     }
                 }
+                // Vertical drag for brightness (left) / volume (right)
+                .pointerInput(isCurrentPage) {
+                    if (!isCurrentPage) return@pointerInput
+                    detectVerticalDragGestures(
+                        onDragStart = { offset ->
+                            dragType = if (offset.x < size.width / 2) DragType.BRIGHTNESS else DragType.VOLUME
+                            dragStartY = offset.y
+                            dragCurrentValue = if (dragType == DragType.BRIGHTNESS) viewModel.currentBrightness else viewModel.currentVolume
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val sensitivity = 300f
+                            val delta = -dragAmount / sensitivity
+                            dragCurrentValue = (dragCurrentValue + delta).coerceIn(0f, 1f)
+                            if (dragType == DragType.BRIGHTNESS) {
+                                viewModel.setBrightness(dragCurrentValue)
+                            } else {
+                                viewModel.setVolume(dragCurrentValue)
+                            }
+                        },
+                        onDragEnd = {
+                            dragType = DragType.NONE
+                        },
+                        onDragCancel = {
+                            dragType = DragType.NONE
+                        }
+                    )
+                }
         ) {
+            // Thumbnail background (shown while video loads)
+            val videoItem = videoList.getOrNull(page)
+            if (videoItem?.thumbnailUri != null && isCurrentPage) {
+                AndroidView(
+                    factory = { ctx ->
+                        android.widget.ImageView(ctx).apply {
+                            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                            setImageURI(videoItem.thumbnailUri)
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
             // ExoPlayer View - only attach to current page
             AndroidView(
                 factory = { ctx ->
@@ -263,6 +316,37 @@ private fun VideoPager(
                 },
                 modifier = Modifier.fillMaxSize()
             )
+
+            // Brightness/Volume drag indicator
+            if (dragType != DragType.NONE) {
+                val icon = if (dragType == DragType.BRIGHTNESS) "☀" else "🔊"
+                val label = if (dragType == DragType.BRIGHTNESS) "亮度" else "音量"
+                val pct = (dragCurrentValue * 100).toInt()
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .background(
+                            Color.Black.copy(alpha = 0.6f),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                        )
+                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                ) {
+                    androidx.compose.foundation.layout.Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = icon,
+                            fontSize = 28.sp
+                        )
+                        Text(
+                            text = "$label $pct%",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
 
             // Seek feedback overlay (+10s, -10s)
             val seekFeedback by viewModel.seekFeedback.collectAsState()
@@ -304,6 +388,28 @@ private fun VideoPager(
                 )
             }
 
+            // Video info overlay (bottom-left, always visible)
+            videoItem?.let { video ->
+                androidx.compose.foundation.layout.Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 12.dp, bottom = 80.dp)
+                ) {
+                    Text(
+                        text = video.displayName,
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = "${formatFileSize(video.size)} · ${formatDuration(video.duration)}",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+
             // Player controls overlay
             if (isCurrentPage && showControls) {
                 PlayerControlsOverlay(
@@ -321,5 +427,28 @@ private fun VideoPager(
                 )
             }
         }
+    }
+}
+
+private enum class DragType { NONE, BRIGHTNESS, VOLUME }
+
+private fun formatFileSize(bytes: Long): String {
+    return when {
+        bytes >= 1024 * 1024 * 1024 -> String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024))
+        bytes >= 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024))
+        bytes >= 1024 -> String.format("%.1f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
+}
+
+private fun formatDuration(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        String.format("%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format("%d:%02d", minutes, seconds)
     }
 }

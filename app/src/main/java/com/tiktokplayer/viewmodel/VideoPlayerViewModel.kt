@@ -1,6 +1,9 @@
 package com.tiktokplayer.viewmodel
 
 import android.content.Context
+import android.media.AudioManager
+import android.provider.Settings
+import android.view.WindowManager
 import android.os.CountDownTimer
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -17,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 data class PlaybackState(
     val isPlaying: Boolean = false,
@@ -79,6 +83,16 @@ class VideoPlayerViewModel(
     private var progressUpdateJob: kotlinx.coroutines.Job? = null
     private var lastPlayedIndex = -1
 
+    // Brightness & Volume (0.0 ~ 1.0)
+    var currentBrightness = 1f
+        private set
+    var currentVolume = 1f
+        private set
+    private var audioManager: AudioManager? = null
+
+    // Playback history: videoId -> last position in ms
+    private var playbackHistory = mutableMapOf<Long, Long>()
+
     init {
         loadVideos()
     }
@@ -118,6 +132,17 @@ class VideoPlayerViewModel(
     fun initializePlayer(context: Context) {
         if (exoPlayer != null) return
 
+        // Initialize audio manager for volume control
+        audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager?.let {
+            val maxVol = it.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val curVol = it.getStreamVolume(AudioManager.STREAM_MUSIC)
+            currentVolume = curVol.toFloat() / maxVol.coerceAtLeast(1)
+        }
+
+        // Load playback history from SharedPreferences
+        loadHistory(context)
+
         exoPlayer = ExoPlayer.Builder(context)
             .build()
             .apply {
@@ -149,18 +174,41 @@ class VideoPlayerViewModel(
         if (videos.isEmpty() || index !in videos.indices) return
         if (index == lastPlayedIndex) return
 
+        // Save position of previous video
+        saveCurrentPosition()
+
         lastPlayedIndex = index
         _currentIndex.value = index
         exoPlayer?.apply {
-            val currentMediaItem = MediaItem.fromUri(videos[index].uri)
-            val mediaItems = mutableListOf(currentMediaItem)
+            // Build media items: previous (for quick swipe back) + current + next
+            val mediaItems = mutableListOf<MediaItem>()
+            val prevIndex = (index - 1 + videos.size) % videos.size
             val nextIndex = (index + 1) % videos.size
-            if (nextIndex != index) {
+
+            // Add prev, current, next — ExoPlayer will buffer ahead
+            if (prevIndex != index) {
+                mediaItems.add(MediaItem.fromUri(videos[prevIndex].uri))
+            }
+            mediaItems.add(MediaItem.fromUri(videos[index].uri))
+            if (nextIndex != index && nextIndex != prevIndex) {
                 mediaItems.add(MediaItem.fromUri(videos[nextIndex].uri))
             }
-            setMediaItems(mediaItems, 0, 0L)
+
+            // The current video is at position 1 if prev exists, else 0
+            val currentMediaItemIndex = if (prevIndex != index) 1 else 0
+            setMediaItems(mediaItems, currentMediaItemIndex, 0L)
             prepare()
             playWhenReady = true
+
+            // Restore last position for this video (if within last 90% of duration)
+            val savedPos = playbackHistory[videos[index].id]
+            if (savedPos != null && savedPos > 0) {
+                val duration = videos[index].duration
+                if (duration > 0 && savedPos < duration * 0.9) {
+                    seekTo(savedPos)
+                }
+            }
+
             // Preserve current speed (don't override if long-pressing)
             if (!_isLongPressSpeed.value) {
                 playbackParameters = PlaybackParameters(_playbackState.value.playbackSpeed)
@@ -313,8 +361,64 @@ class VideoPlayerViewModel(
         }
     }
 
+    fun setBrightness(value: Float) {
+        currentBrightness = value.coerceIn(0f, 1f)
+        // Apply to window - caller must pass window reference
+        // We store it here for the UI to read and apply
+    }
+
+    fun setVolume(value: Float) {
+        currentVolume = value.coerceIn(0f, 1f)
+        audioManager?.let { am ->
+            val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val targetVol = (currentVolume * maxVol).toInt().coerceIn(0, maxVol)
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
+        }
+    }
+
+    fun applyBrightnessToWindow(window: android.view.Window?) {
+        window?.let {
+            val layoutParams = it.attributes
+            layoutParams.screenBrightness = currentBrightness
+            it.attributes = layoutParams
+        }
+    }
+
+    private fun loadHistory(context: Context) {
+        try {
+            val prefs = context.getSharedPreferences("playback_history", Context.MODE_PRIVATE)
+            val json = prefs.getString("history", null) ?: return
+            val obj = JSONObject(json)
+            obj.keys().forEach { key ->
+                playbackHistory[key.toLong()] = obj.getLong(key)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun saveHistory(context: Context?) {
+        try {
+            val ctx = context ?: return
+            val prefs = ctx.getSharedPreferences("playback_history", Context.MODE_PRIVATE)
+            val obj = JSONObject()
+            playbackHistory.forEach { (id, pos) ->
+                obj.put(id.toString(), pos)
+            }
+            prefs.edit().putString("history", obj.toString()).apply()
+        } catch (_: Exception) {}
+    }
+
+    fun saveCurrentPosition() {
+        val player = exoPlayer ?: return
+        val videos = _videoList.value
+        val idx = _currentIndex.value
+        if (idx in videos.indices) {
+            playbackHistory[videos[idx].id] = player.currentPosition
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
+        saveCurrentPosition()
         progressUpdateJob?.cancel()
         countDownTimer?.cancel()
         exoPlayer?.release()
