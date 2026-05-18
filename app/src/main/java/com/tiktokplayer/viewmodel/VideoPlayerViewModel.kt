@@ -111,6 +111,9 @@ class VideoPlayerViewModel(
                 _videoList.value = firstBatch.shuffled()
                 _isLoading.value = false
 
+                // Prune history for deleted videos
+                pruneHistory(firstBatch.map { it.id }.toSet())
+
                 val totalCount = repository.getVideoCount()
                 if (totalCount > PAGE_SIZE) {
                     val remaining = repository.getVideosPaged(
@@ -407,10 +410,25 @@ class VideoPlayerViewModel(
             val prefs = context.getSharedPreferences("playback_history", Context.MODE_PRIVATE)
             val json = prefs.getString("history", null) ?: return
             val obj = JSONObject(json)
+            val now = System.currentTimeMillis()
+            val maxAge = 30L * 24 * 60 * 60 * 1000 // 30 days
+            var cleaned = false
             obj.keys().forEach { key ->
-                playbackHistory[key.toLong()] = obj.getLong(key)
+                val pos = obj.getLong(key)
+                // Position value is just a millisecond offset — we store timestamps separately
+                // For now, just load all entries. Cleanup happens via videoId staleness.
+                playbackHistory[key.toLong()] = pos
             }
         } catch (_: Exception) {}
+    }
+
+    /**
+     * Remove history entries for videos that no longer exist in the library.
+     * Prevents SharedPreferences from growing unbounded.
+     */
+    private fun pruneHistory(currentVideoIds: Set<Long>) {
+        val keysToRemove = playbackHistory.keys.filter { it !in currentVideoIds }
+        keysToRemove.forEach { playbackHistory.remove(it) }
     }
 
     private fun saveHistory(context: Context?) {
@@ -442,6 +460,8 @@ class VideoPlayerViewModel(
         countDownTimer?.cancel()
         exoPlayer?.release()
         exoPlayer = null
+        // Clean up thumbnail cache files
+        appContext?.let { MediaStoreRepository(it).cleanupThumbnailCache() }
     }
 
     class Factory(private val context: Context) : ViewModelProvider.Factory {

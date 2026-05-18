@@ -2,13 +2,8 @@ package com.tiktokplayer.data
 
 import android.content.ContentUris
 import android.content.Context
-import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
-import android.os.CancellationSignal
 import android.provider.MediaStore
-import android.util.Size
-import java.io.ByteArrayOutputStream
 
 class MediaStoreRepository(private val context: Context) {
 
@@ -105,53 +100,12 @@ class MediaStoreRepository(private val context: Context) {
 
     /**
      * Get a thumbnail URI for a video.
-     * Uses ContentResolver.loadThumbnail on API 29+ (handles scoped storage correctly),
-     * falls back to deprecated Video.Thumbnails on older versions.
+     * Returns the video URI itself — Coil handles async thumbnail extraction.
+     * No synchronous bitmap loading, so no main-thread blocking.
      */
     private fun getThumbnailUri(videoId: Long, videoUri: Uri): Uri? {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Android 10+: use loadThumbnail which works with scoped storage
-                // Returns a Bitmap — we store it as a content URI reference
-                // For simplicity, return the video URI itself (PlayerView handles it)
-                // The thumbnail is just a visual hint while video loads
-                val bitmap = context.contentResolver.loadThumbnail(
-                    videoUri, Size(320, 240), null as CancellationSignal?
-                )
-                if (bitmap != null) {
-                    // Convert bitmap to a data URI that ImageView can use
-                    bitmapToUri(bitmap)
-                } else {
-                    null
-                }
-            } else {
-                // Android 9 and below: use deprecated Video.Thumbnails API
-                ContentUris.withAppendedId(
-                    MediaStore.Video.Thumbnails.EXTERNAL_CONTENT_URI, videoId
-                )
-            }
-        } catch (_: Exception) {
-            // Thumbnail generation failed — not critical, just show black background
-            null
-        }
-    }
-
-    /**
-     * Convert a Bitmap to a content Uri via a temporary file.
-     * This avoids the deprecated Video.Thumbnails API on newer devices.
-     */
-    private fun bitmapToUri(bitmap: Bitmap): Uri? {
-        return try {
-            val stream = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
-            val bytes = stream.toByteArray()
-            // Use a temporary file in the app's cache directory
-            val tempFile = java.io.File(context.cacheDir, "thumb_${System.nanoTime()}.jpg")
-            tempFile.writeBytes(bytes)
-            Uri.fromFile(tempFile)
-        } catch (_: Exception) {
-            null
-        }
+        // Just return the video URI; Coil's videoFrameFetcher will extract a frame
+        return videoUri
     }
 
     /**

@@ -65,6 +65,9 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.2.1")
     implementation("androidx.media3:media3-session:1.2.1")
 
+    // Coil — async image loading for video thumbnails
+    implementation("io.coil-kt:coil-compose:2.5.0")
+
     // Core
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")

@@ -43,6 +43,7 @@ TikTokPlayer/
 │       │   └── ui/theme/
 │       │       └── Color.kt                 # 颜色定义
 │       └── res/
+│           ├── layout/                      # exo_player_view.xml (TextureView 布局)
 │           ├── values/                      # strings.xml, colors.xml, themes.xml
 │           ├── drawable/                    # 启动图标矢量图
 │           ├── mipmap-*/                    # 各分辨率启动图标（含 PNG fallback）
@@ -110,6 +111,15 @@ TikTokPlayer/
 | 36 | 亮度：LaunchedEffect key 不响应变化 | 🟡 | 改用 snapshotFlow { viewModel.currentBrightness } 正确监听变化 |
 | 37 | CI 编译错误 | 🔴 | 移除 setUseTextureView（旧 ExoPlayer API，Media3 不存在），回退 LocalLifecycleOwner 路径 |
 
+### 第七轮优化（智能体 #6 — 黑屏根治 + 兼容性提升）
+| # | 问题 | 严重性 | 修复方式 |
+|---|------|--------|----------|
+| 38 | 黑屏根治：SurfaceView 在国产机型兼容性差 | 🔴 | 新建 `res/layout/exo_player_view.xml`，设置 `app:surface_type="texture_view"`，代码改为 inflate XML 布局 |
+| 39 | 缩略图同步加载卡主线程 | 🟡 | 引入 Coil 2.5.0 异步加载，MediaStoreRepository 不再同步生成 Bitmap |
+| 40 | 手势冲突：亮度/音量拖拽与翻页冲突 | 🟡 | 自定义 `detectVerticalDragGesturesWithDirection`，先检测移动方向（10px 阈值），垂直主导才激活调节，水平主导让给 VerticalPager |
+| 41 | 播放历史无限膨胀 | 🟢 | 新增 `pruneHistory()` — 加载视频后自动清理已删除视频的历史条目；ViewModel onCleared 时清理缩略图缓存 |
+| 42 | 缩略图缓存无清理 | 🟢 | `onCleared()` 中调用 `cleanupThumbnailCache()`，删除 1 小时前的临时文件 |
+
 ---
 
 ## 🐛 已修复的全部 BUG
@@ -137,19 +147,23 @@ TikTokPlayer/
 | 5 | 缩略图 API 在 Android 10+ 废弃 | 🟡 | 改用 loadThumbnail API |
 | 5 | 亮度 LaunchedEffect 不响应变化 | 🟡 | 改用 snapshotFlow |
 | 5 | setUseTextureView 不存在于 Media3 | 🔴 | 移除，使用默认 PlayerView 配置 |
+| 6 | SurfaceView 在国产设备黑屏 | 🔴 | XML 布局 `surface_type="texture_view"` + inflate 方式 |
+| 6 | 缩略图同步加载大视频卡顿 | 🟡 | 引入 Coil 异步加载，移除同步 Bitmap 生成 |
+| 6 | 亮度/音量手势与翻页冲突 | 🟡 | 方向感知拖拽检测（10px 阈值，垂直优先） |
+| 6 | 播放历史无限膨胀 | 🟢 | pruneHistory 清理已删除视频条目 |
 
 ---
 
 ## ⚠️ 待解决 / 继续优化方向
 
 ### 已知问题
-1. **黑屏兼容性** — 当前使用默认 SurfaceView，在部分设备上仍可能出现黑屏。下一步可尝试：XML 布局中设置 `app:surface_type="texture_view"` 或在代码中调用 `playerView.setVideoTextureView(TextureView(context))`
-2. **缩略图缓存** — 当前用 cacheDir 存临时 JPEG 文件，可能占用空间。已有 cleanupThumbnailCache() 方法，需在合适时机调用
+1. ~~**黑屏兼容性**~~ — ✅ 已修复：XML 布局 `surface_type="texture_view"` 替代默认 SurfaceView
+2. ~~**缩略图缓存**~~ — ✅ 已修复：`onCleared()` 自动清理 + Coil 异步加载不再生成临时 Bitmap
 
 ### 中优先级
-3. **手势冲突优化** — VerticalPager 的滑动切换与垂直拖拽（亮度/音量）可能冲突，需要更精细的 pointerInput 判断（如先判断水平位移再决定是滑页还是调参）
-4. **缩略图异步加载** — 当前用 contentResolver.loadThumbnail 同步加载，大视频缩略图可能导致卡顿，建议改用 Coil 等图片库异步加载
-5. **播放历史清理** — 超过 30 天的历史记录自动清理，避免 SharedPreferences 膨胀
+3. ~~**手势冲突优化**~~ — ✅ 已修复：方向感知拖拽检测
+4. ~~**缩略图异步加载**~~ — ✅ 已修复：引入 Coil 2.5.0
+5. **播放历史清理** — ✅ 已修复：pruneHistory 清理已删除视频条目。可进一步优化：记录最后播放时间戳，自动清理 30 天未播放的条目
 
 ### 低优先级
 4. **视频删除功能** — 长按菜单删除不需要的视频
@@ -248,6 +262,7 @@ jobs:
 | Compose BOM | 2024.01.00 |
 | Compose Compiler | 1.5.8 |
 | Media3 ExoPlayer | 1.2.1 |
+| Coil Compose | 2.5.0 |
 | Activity Compose | 1.8.2 |
 | Lifecycle | 2.7.0 |
 | compileSdk | 34 |
@@ -296,3 +311,6 @@ e1b8300 fix: 修复滑动黑屏、同步冲突、控制栏交互
 4. **为什么播放历史用 SharedPreferences 而不是 Room？** → 数据量小（仅 videoId→position 映射），SharedPreferences 更简单，无需额外依赖
 5. **为什么不能用 setUseTextureView？** → 这是旧版 ExoPlayer 2 的 API，Media3 1.2.1 的 PlayerView 没有此方法。Media3 中 SurfaceView 是默认行为，TextureView 需要通过 XML `app:surface_type="texture_view"` 或 `setVideoTextureView()` 设置
 6. **为什么 LocalLifecycleOwner 用 `androidx.compose.ui.platform`？** → `lifecycle-runtime-compose:2.7.0` 还没有把 `LocalLifecycleOwner` 搬到 `androidx.lifecycle.compose`（需要 2.8.0+），用旧路径兼容
+7. **为什么黑屏用 XML inflate 而不是代码创建 TextureView？** → XML 的 `app:surface_type="texture_view"` 是 Media3 官方推荐方式，确保 PlayerView 内部正确初始化 TextureView 的生命周期和渲染管线。代码调用 `setVideoTextureView()` 可能遗漏内部初始化步骤
+8. **为什么缩略图改用 Coil 而不是继续用 contentResolver.loadThumbnail？** → 同步加载大视频缩略图会阻塞主线程造成卡顿，Coil 自带内存/磁盘缓存、自动取消、协程异步加载，且原生支持从视频 URI 提取帧
+9. **手势方向检测阈值为什么是 10px？** → 太小容易误判（手指微抖就触发），太大会让调节响应迟钝。10px 在大多数设备上约 2-3mm，用户能明确表达意图

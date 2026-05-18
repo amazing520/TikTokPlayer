@@ -2,17 +2,20 @@ package com.tiktokplayer.screens
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.view.LayoutInflater
 import android.view.WindowManager
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,6 +31,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -37,9 +41,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.media3.common.Player
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.tiktokplayer.R
 import com.tiktokplayer.components.PlayerControlsOverlay
 import com.tiktokplayer.viewmodel.VideoPlayerViewModel
 import kotlinx.coroutines.delay
@@ -266,9 +269,11 @@ private fun VideoPager(
                     }
                 }
                 // Vertical drag for brightness (left) / volume (right)
+                // Uses direction detection: only activate after clear vertical intent,
+                // preventing conflict with VerticalPager's page-swipe gesture
                 .pointerInput(isCurrentPage) {
                     if (!isCurrentPage) return@pointerInput
-                    detectVerticalDragGestures(
+                    detectVerticalDragGesturesWithDirection(
                         onDragStart = { offset ->
                             dragType = if (offset.x < size.width / 2) DragType.BRIGHTNESS else DragType.VOLUME
                             dragStartY = offset.y
@@ -294,26 +299,25 @@ private fun VideoPager(
                     )
                 }
         ) {
-            // ExoPlayer View — use TextureView for broader device compatibility
-            // TextureView works better with Compose's animation/transform system than SurfaceView
+            // ExoPlayer View — inflate from XML with surface_type="texture_view"
+            // TextureView is more compatible with Compose and avoids black screen on many devices
             AndroidView(
                 factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        useController = false
-                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                        // Keep last frame when player resets (prevents black flash between videos)
+                    val view = LayoutInflater.from(ctx).inflate(R.layout.exo_player_view, null)
+                    view.findViewById<PlayerView>(R.id.player_view).apply {
                         setKeepContentOnPlayerReset(true)
                     }
+                    view
                 },
                 update = { view ->
+                    val playerView = view.findViewById<PlayerView>(R.id.player_view)
                     if (isCurrentPage) {
-                        if (view.player !== viewModel.exoPlayer) {
-                            view.player = viewModel.exoPlayer
+                        if (playerView.player !== viewModel.exoPlayer) {
+                            playerView.player = viewModel.exoPlayer
                         }
                     } else {
-                        if (view.player != null) {
-                            view.player = null
+                        if (playerView.player != null) {
+                            playerView.player = null
                         }
                     }
                 },
@@ -435,6 +439,57 @@ private fun VideoPager(
 }
 
 private enum class DragType { NONE, BRIGHTNESS, VOLUME }
+
+/**
+ * Direction-aware vertical drag gesture detector.
+ * Waits for the user to move their finger past a threshold before activating,
+ * and only activates if the movement is predominantly vertical.
+ * This prevents conflicts with VerticalPager's page-swipe gesture.
+ */
+private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectVerticalDragGesturesWithDirection(
+    onDragStart: (androidx.compose.ui.geometry.Offset) -> Unit,
+    onVerticalDrag: (change: androidx.compose.ui.input.pointer.PointerInputChange, dragAmount: Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit
+) {
+    val directionThreshold = 10f
+    awaitPointerEventScope {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        var dragStarted = false
+        val startOffset = down.position
+
+        while (true) {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull() ?: continue
+
+            if (!change.pressed) {
+                // Finger lifted
+                if (dragStarted) onDragEnd()
+                break
+            }
+
+            val currentPosition = change.position
+            val dx = kotlin.math.abs(currentPosition.x - startOffset.x)
+            val dy = kotlin.math.abs(currentPosition.y - startOffset.y)
+
+            if (!dragStarted) {
+                if (dx > directionThreshold || dy > directionThreshold) {
+                    if (dy > dx) {
+                        dragStarted = true
+                        onDragStart(startOffset)
+                        change.consume()
+                    } else {
+                        // Horizontal intent — abort, let pager handle
+                        break
+                    }
+                }
+            } else {
+                change.consume()
+                onVerticalDrag(change, change.position.y - change.previousPosition.y)
+            }
+        }
+    }
+}
 
 private fun formatFileSize(bytes: Long): String {
     return when {
