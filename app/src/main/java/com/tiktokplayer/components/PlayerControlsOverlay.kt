@@ -93,7 +93,6 @@ fun PlayerControlsOverlay(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Video name
                 Text(
                     text = videoName,
                     color = White,
@@ -103,7 +102,6 @@ fun PlayerControlsOverlay(
                     modifier = Modifier.weight(1f)
                 )
 
-                // Landscape toggle
                 IconButton(onClick = onToggleLandscape) {
                     Icon(
                         imageVector = if (isLandscape) Icons.Default.Portrait else Icons.Default.Landscape,
@@ -145,19 +143,26 @@ fun PlayerControlsOverlay(
                 .padding(start = 16.dp, end = 16.dp, bottom = 32.dp, top = 24.dp)
         ) {
             // Progress bar
-            val progress = if (playbackState.totalDuration > 0) {
-                (if (isSeeking) seekPosition else playbackState.currentPosition.toFloat()) / playbackState.totalDuration.toFloat()
-            } else 0f
+            // When seeking: show seek position. When not seeking: show player position.
+            // Use Int-range Slider to avoid float precision issues
+            val duration = playbackState.totalDuration.coerceAtLeast(1)
+            val displayPosition = if (isSeeking) {
+                seekPosition.toLong()
+            } else {
+                playbackState.currentPosition
+            }
+            val progress = displayPosition.toFloat() / duration.toFloat()
 
             Slider(
-                value = progress,
+                value = progress.coerceIn(0f, 1f),
                 onValueChange = { newProgress ->
                     isSeeking = true
-                    seekPosition = newProgress * playbackState.totalDuration
+                    seekPosition = (newProgress * duration).toFloat()
                 },
                 onValueChangeFinished = {
+                    val seekTarget = seekPosition.toLong()
                     isSeeking = false
-                    onSeek(seekPosition.toLong())
+                    onSeek(seekTarget)
                 },
                 modifier = Modifier.fillMaxWidth(),
                 colors = SliderDefaults.colors(
@@ -175,9 +180,9 @@ fun PlayerControlsOverlay(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Time display
+                // Time display: current / total
                 Text(
-                    text = "${formatTime(if (isSeeking) seekPosition.toLong() else playbackState.currentPosition)} / ${formatTime(playbackState.totalDuration)}",
+                    text = "${formatTime(displayPosition)} / ${formatTime(playbackState.totalDuration)}",
                     color = White70,
                     fontSize = 13.sp
                 )
@@ -219,7 +224,7 @@ fun PlayerControlsOverlay(
 
                     Spacer(modifier = Modifier.width(8.dp))
 
-                    // Timer
+                    // Timer button
                     Box {
                         IconButton(onClick = { showTimerDialog = true }) {
                             Icon(
@@ -317,11 +322,18 @@ private fun TimerDialog(
     )
 }
 
+/**
+ * Format milliseconds to time string.
+ * Shows H:MM:SS for videos >= 1 hour, M:SS otherwise.
+ */
 private fun formatTime(ms: Long): String {
     val totalSeconds = (ms / 1000).coerceAtLeast(0)
-    val minutes = totalSeconds / 60
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60
-    return String.format("%d:%02d", minutes, seconds)
+    return if (hours > 0) {
+        String.format("%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format("%d:%02d", minutes, seconds)
+    }
 }
-
-

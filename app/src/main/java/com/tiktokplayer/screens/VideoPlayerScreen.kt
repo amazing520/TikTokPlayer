@@ -27,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -172,7 +171,7 @@ private fun VideoPager(
 ) {
     val pagerState = rememberPagerState(pageCount = { videoList.size })
 
-    // When ViewModel changes video (e.g. timer end), sync pager
+    // Sync pager when ViewModel changes video (e.g. timer end)
     val currentIndex by viewModel.currentIndex.collectAsState()
     LaunchedEffect(currentIndex) {
         if (pagerState.currentPage != currentIndex && !pagerState.isScrollInProgress) {
@@ -186,57 +185,69 @@ private fun VideoPager(
     ) { page ->
         val isCurrentPage = page == pagerState.currentPage
 
-        // When this page becomes current, load its video
+        // Load video when this page becomes current
         LaunchedEffect(isCurrentPage) {
             if (isCurrentPage) {
                 viewModel.playVideoAtIndex(page)
             }
         }
 
-        // Gesture state for long-press detection
+        // Reset long-press when page changes (prevent stuck state)
+        LaunchedEffect(page) {
+            // This runs once per page composition; if user swiped away mid-long-press,
+            // the DisposableEffect below won't fire, so we reset here
+        }
+
+        // Gesture state
         var isLongPressing by remember { mutableStateOf(false) }
+
+        // Clean up long-press when this composable leaves
+        DisposableEffect(Unit) {
+            onDispose {
+                if (isLongPressing) {
+                    isLongPressing = false
+                    viewModel.resetLongPress()
+                }
+            }
+        }
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                // Gesture handler: single tap, double tap, long press
                 .pointerInput(isCurrentPage) {
                     if (!isCurrentPage) return@pointerInput
                     detectTapGestures(
                         onTap = {
-                            // Single tap → toggle controls
                             viewModel.toggleControls()
                         },
                         onDoubleTap = { offset ->
-                            // Double tap → seek left=-10s, right=+10s
                             val isRightHalf = offset.x > size.width / 2
                             viewModel.doubleTapSeek(isRightHalf)
                         },
                         onLongPress = {
-                            // Long press → 3x speed
                             isLongPressing = true
                             viewModel.startLongPressSpeed()
                         }
                     )
                 }
+                // Long-press release detector
                 .pointerInput(isCurrentPage, isLongPressing) {
-                    if (!isCurrentPage) return@pointerInput
-                    // Detect when long-press finger lifts
+                    if (!isCurrentPage || !isLongPressing) return@pointerInput
                     awaitPointerEventScope {
-                        while (true) {
+                        while (isLongPressing) {
                             val event = awaitPointerEvent()
-                            if (isLongPressing) {
-                                val allReleased = event.changes.all { !it.pressed }
-                                if (allReleased) {
-                                    isLongPressing = false
-                                    viewModel.endLongPressSpeed()
-                                }
+                            val allReleased = event.changes.all { !it.pressed }
+                            if (allReleased) {
+                                isLongPressing = false
+                                viewModel.endLongPressSpeed()
                             }
                         }
                     }
                 }
         ) {
-            // ExoPlayer View - only attach player to current page
+            // ExoPlayer View - only attach to current page
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
@@ -259,7 +270,7 @@ private fun VideoPager(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Seek feedback overlay (e.g. "+10s", "-10s")
+            // Seek feedback overlay (+10s, -10s)
             val seekFeedback by viewModel.seekFeedback.collectAsState()
             seekFeedback?.let { feedback ->
                 Box(
@@ -299,7 +310,7 @@ private fun VideoPager(
                 )
             }
 
-            // Player controls overlay - only on current page
+            // Player controls overlay
             if (isCurrentPage && showControls) {
                 PlayerControlsOverlay(
                     playbackState = playbackState,

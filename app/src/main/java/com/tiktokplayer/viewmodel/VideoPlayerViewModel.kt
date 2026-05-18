@@ -76,7 +76,7 @@ class VideoPlayerViewModel(
         private set
 
     private var countDownTimer: CountDownTimer? = null
-    private var progressUpdateTimer: CountDownTimer? = null
+    private var progressUpdateJob: kotlinx.coroutines.Job? = null
     private var lastPlayedIndex = -1
 
     init {
@@ -86,7 +86,6 @@ class VideoPlayerViewModel(
     private fun loadVideos() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Load first batch for fast startup
                 val firstBatch = repository.getVideosPaged(limit = PAGE_SIZE, offset = 0)
                 if (firstBatch.isEmpty()) {
                     _errorMessage.value = "未找到本地视频文件"
@@ -96,7 +95,6 @@ class VideoPlayerViewModel(
                 _videoList.value = firstBatch.shuffled()
                 _isLoading.value = false
 
-                // Load remaining videos in background
                 val totalCount = repository.getVideoCount()
                 if (totalCount > PAGE_SIZE) {
                     val remaining = repository.getVideosPaged(
@@ -140,7 +138,6 @@ class VideoPlayerViewModel(
                 })
             }
 
-        // Load first video
         if (_videoList.value.isNotEmpty()) {
             playVideoAtIndex(0)
             startProgressUpdater()
@@ -150,24 +147,24 @@ class VideoPlayerViewModel(
     fun playVideoAtIndex(index: Int) {
         val videos = _videoList.value
         if (videos.isEmpty() || index !in videos.indices) return
-        if (index == lastPlayedIndex) return // Avoid redundant loads
+        if (index == lastPlayedIndex) return
 
         lastPlayedIndex = index
         _currentIndex.value = index
         exoPlayer?.apply {
             val currentMediaItem = MediaItem.fromUri(videos[index].uri)
-
-            // Build playlist with current + next video for preloading
             val mediaItems = mutableListOf(currentMediaItem)
             val nextIndex = (index + 1) % videos.size
             if (nextIndex != index) {
                 mediaItems.add(MediaItem.fromUri(videos[nextIndex].uri))
             }
-
             setMediaItems(mediaItems, 0, 0L)
             prepare()
             playWhenReady = true
-            playbackParameters = PlaybackParameters(_playbackState.value.playbackSpeed)
+            // Preserve current speed (don't override if long-pressing)
+            if (!_isLongPressSpeed.value) {
+                playbackParameters = PlaybackParameters(_playbackState.value.playbackSpeed)
+            }
         }
         updatePlaybackState()
     }
@@ -181,7 +178,8 @@ class VideoPlayerViewModel(
 
     fun seekTo(positionMs: Long) {
         exoPlayer?.seekTo(positionMs)
-        updatePlaybackState()
+        // Don't update immediately - let the player's STATE_READY callback handle it
+        // to avoid flicker between old and new position
     }
 
     fun seekForward(ms: Long = 10_000) {
@@ -202,9 +200,6 @@ class VideoPlayerViewModel(
         }
     }
 
-    /**
-     * Double-tap seek: left half = -10s, right half = +10s
-     */
     fun doubleTapSeek(isRightHalf: Boolean) {
         if (isRightHalf) seekForward(10_000) else seekBackward(10_000)
     }
@@ -218,9 +213,6 @@ class VideoPlayerViewModel(
         }
     }
 
-    /**
-     * Start long-press 3x speed (called on pointer down with hold)
-     */
     fun startLongPressSpeed() {
         if (_isLongPressSpeed.value) return
         speedBeforeLongPress = _playbackState.value.playbackSpeed
@@ -229,9 +221,6 @@ class VideoPlayerViewModel(
         _playbackState.value = _playbackState.value.copy(playbackSpeed = 2.0f)
     }
 
-    /**
-     * End long-press speed (restore previous speed)
-     */
     fun endLongPressSpeed() {
         if (!_isLongPressSpeed.value) return
         _isLongPressSpeed.value = false
@@ -239,8 +228,23 @@ class VideoPlayerViewModel(
         _playbackState.value = _playbackState.value.copy(playbackSpeed = speedBeforeLongPress)
     }
 
+    /**
+     * Reset long-press state (called when swiping to another page)
+     */
+    fun resetLongPress() {
+        if (_isLongPressSpeed.value) {
+            _isLongPressSpeed.value = false
+            exoPlayer?.playbackParameters = PlaybackParameters(speedBeforeLongPress)
+            _playbackState.value = _playbackState.value.copy(playbackSpeed = speedBeforeLongPress)
+        }
+    }
+
     fun setPlaybackSpeed(speed: Float) {
         val clampedSpeed = speed.coerceIn(0.5f, 3.0f)
+        // If long-pressing, update the "before" speed so it restores to this
+        if (_isLongPressSpeed.value) {
+            speedBeforeLongPress = clampedSpeed
+        }
         exoPlayer?.playbackParameters = PlaybackParameters(clampedSpeed)
         _playbackState.value = _playbackState.value.copy(playbackSpeed = clampedSpeed)
     }
@@ -287,28 +291,31 @@ class VideoPlayerViewModel(
 
     private fun updatePlaybackState() {
         exoPlayer?.let {
+            val duration = it.duration
+            // duration can be -1 (unset) or C.TIME_UNSET before media is ready
+            val safeDuration = if (duration > 0) duration else 0L
             _playbackState.value = PlaybackState(
                 isPlaying = it.isPlaying,
                 currentPosition = it.currentPosition.coerceAtLeast(0),
-                totalDuration = it.duration.coerceAtLeast(0),
+                totalDuration = safeDuration,
                 playbackSpeed = it.playbackParameters.speed
             )
         }
     }
 
     private fun startProgressUpdater() {
-        progressUpdateTimer?.cancel()
-        progressUpdateTimer = object : CountDownTimer(Long.MAX_VALUE, 500) {
-            override fun onTick(millisUntilFinished: Long) {
+        progressUpdateJob?.cancel()
+        progressUpdateJob = viewModelScope.launch {
+            while (true) {
                 updatePlaybackState()
+                delay(500)
             }
-            override fun onFinish() {}
-        }.start()
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
-        progressUpdateTimer?.cancel()
+        progressUpdateJob?.cancel()
         countDownTimer?.cancel()
         exoPlayer?.release()
         exoPlayer = null
