@@ -178,8 +178,8 @@ class VideoPlayerViewModel(
 
     fun seekTo(positionMs: Long) {
         exoPlayer?.seekTo(positionMs)
-        // Don't update immediately - let the player's STATE_READY callback handle it
-        // to avoid flicker between old and new position
+        // Update immediately so UI reflects the new position without 500ms delay
+        updatePlaybackState()
     }
 
     fun seekForward(ms: Long = 10_000) {

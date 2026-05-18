@@ -192,12 +192,6 @@ private fun VideoPager(
             }
         }
 
-        // Reset long-press when page changes (prevent stuck state)
-        LaunchedEffect(page) {
-            // This runs once per page composition; if user swiped away mid-long-press,
-            // the DisposableEffect below won't fire, so we reset here
-        }
-
         // Gesture state
         var isLongPressing by remember { mutableStateOf(false) }
 
