@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.media3.common.Player
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -295,16 +295,14 @@ private fun VideoPager(
                 }
         ) {
             // ExoPlayer View — use TextureView for broader device compatibility
-            // This is the key fix for black screen on many devices
+            // TextureView works better with Compose's animation/transform system than SurfaceView
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         useController = false
                         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                         setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                        // Fix black screen: use TextureView instead of SurfaceView
-                        setUseTextureView(true)
-                        // Keep last frame on player reset (prevents black flash)
+                        // Keep last frame when player resets (prevents black flash between videos)
                         setKeepContentOnPlayerReset(true)
                     }
                 },
