@@ -1,8 +1,11 @@
 package com.tiktokplayer.data
 
+import android.app.PendingIntent
 import android.content.ContentUris
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
 
 class MediaStoreRepository(private val context: Context) {
@@ -107,6 +110,39 @@ class MediaStoreRepository(private val context: Context) {
         // Just return the video URI; Coil's videoFrameFetcher will extract a frame
         return videoUri
     }
+
+    /**
+     * Delete a video file. Returns true if deletion was successful or pending user approval.
+     * On Android 11+ (API 30+), uses MediaStore.createDeleteRequest for scoped storage.
+     * On older versions, directly deletes via contentResolver.
+     */
+    fun deleteVideo(videoUri: Uri): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Android 11+: use system delete dialog (requires user confirmation)
+                val pendingIntent = MediaStore.createDeleteRequest(
+                    context.contentResolver, listOf(videoUri)
+                )
+                // Caller must launch this PendingIntent from an Activity
+                // Store it for the caller to use
+                lastDeleteIntent = pendingIntent
+                true
+            } else {
+                // Android 10 and below: direct delete
+                val deleted = context.contentResolver.delete(videoUri, null, null)
+                deleted > 0
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Check if a pending delete request exists (Android 11+).
+     * The caller Activity must launch this PendingIntent.
+     */
+    var lastDeleteIntent: PendingIntent? = null
+        private set
 
     /**
      * Clean up old thumbnail cache files (call periodically).

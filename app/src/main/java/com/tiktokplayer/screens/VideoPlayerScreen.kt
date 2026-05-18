@@ -222,6 +222,7 @@ private fun VideoPager(
         var dragType by remember { mutableStateOf(DragType.NONE) }
         var dragStartY by remember { mutableFloatStateOf(0f) }
         var dragCurrentValue by remember { mutableFloatStateOf(0f) }
+        var showContextMenu by remember { mutableStateOf(false) }
 
         // Clean up long-press when this composable leaves
         DisposableEffect(Unit) {
@@ -232,6 +233,9 @@ private fun VideoPager(
                 }
             }
         }
+
+        // Handle delete result from Activity
+        val deleteRequest by viewModel.deleteRequest.collectAsState()
 
         Box(
             modifier = Modifier
@@ -247,26 +251,12 @@ private fun VideoPager(
                         onDoubleTap = { offset ->
                             val isRightHalf = offset.x > size.width / 2
                             viewModel.doubleTapSeek(isRightHalf)
+                            viewModel.showHeartAnimation()
                         },
                         onLongPress = {
-                            isLongPressing = true
-                            viewModel.startLongPressSpeed()
+                            showContextMenu = true
                         }
                     )
-                }
-                // Long-press release detector
-                .pointerInput(isCurrentPage, isLongPressing) {
-                    if (!isCurrentPage || !isLongPressing) return@pointerInput
-                    awaitPointerEventScope {
-                        while (isLongPressing) {
-                            val event = awaitPointerEvent()
-                            val allReleased = event.changes.all { !it.pressed }
-                            if (allReleased) {
-                                isLongPressing = false
-                                viewModel.endLongPressSpeed()
-                            }
-                        }
-                    }
                 }
                 // Vertical drag for brightness (left) / volume (right)
                 // Uses direction detection: only activate after clear vertical intent,
@@ -432,6 +422,80 @@ private fun VideoPager(
                     onSetTimer = { viewModel.setTimer(it) },
                     onCancelTimer = { viewModel.cancelTimer() },
                     onClose = { activity?.finish() }
+                )
+            }
+
+            // Long-press context menu
+            if (showContextMenu) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .pointerInput(Unit) {
+                            detectTapGestures(onTap = { showContextMenu = false })
+                        }
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .background(
+                                Color(0xFF1E1E1E),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                            .padding(vertical = 8.dp)
+                    ) {
+                        // Delete button
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                viewModel.deleteVideo(page)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("🗑 删除视频", color = Color(0xFFFF6B6B), fontSize = 16.sp)
+                        }
+                        // Speed options
+                        listOf(0.5f, 1.0f, 1.5f, 2.0f, 3.0f).forEach { speed ->
+                            androidx.compose.material3.TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    viewModel.setPlaybackSpeed(speed)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    "${speed}x 倍速",
+                                    color = if (playbackState.playbackSpeed == speed) Color(0xFFFF4444) else Color.White,
+                                    fontSize = 16.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Delete confirmation (Android 11+ system dialog)
+            deleteRequest?.let { pendingIntent ->
+                LaunchedEffect(pendingIntent) {
+                    try {
+                        activity?.startIntentSenderForResult(
+                            pendingIntent.intentSender,
+                            1001, null, 0, 0, 0
+                        )
+                    } catch (_: Exception) {}
+                    viewModel.onDeleteResult(page, true)
+                }
+            }
+
+            // Heart animation (double-tap)
+            val showHeart by viewModel.showHeart.collectAsState()
+            if (showHeart) {
+                Text(
+                    text = "❤️",
+                    fontSize = 80.sp,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(120.dp)
                 )
             }
         }

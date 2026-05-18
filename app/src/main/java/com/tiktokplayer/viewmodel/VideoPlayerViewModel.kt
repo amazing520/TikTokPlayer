@@ -67,6 +67,15 @@ class VideoPlayerViewModel(
     private val _shouldClose = MutableStateFlow(false)
     val shouldClose: StateFlow<Boolean> = _shouldClose.asStateFlow()
 
+    // Delete confirmation
+    private val _deleteRequest = MutableStateFlow<android.app.PendingIntent?>(null)
+    val deleteRequest: StateFlow<android.app.PendingIntent?> = _deleteRequest.asStateFlow()
+
+    // Double-tap heart animation
+    private val _showHeart = MutableStateFlow(false)
+    val showHeart: StateFlow<Boolean> = _showHeart.asStateFlow()
+    private var heartDismissJob: kotlinx.coroutines.Job? = null
+
     // Long-press speed boost
     private val _isLongPressSpeed = MutableStateFlow(false)
     val isLongPressSpeed: StateFlow<Boolean> = _isLongPressSpeed.asStateFlow()
@@ -356,6 +365,78 @@ class VideoPlayerViewModel(
 
     fun consumeCloseEvent() {
         _shouldClose.value = false
+    }
+
+    /**
+     * Delete the video at the given index.
+     * On Android 11+, this creates a system delete request (user must confirm).
+     * On older versions, directly deletes the file.
+     */
+    fun deleteVideo(index: Int) {
+        val videos = _videoList.value
+        if (index !in videos.indices) return
+        val video = videos[index]
+
+        val repo = appContext?.let { MediaStoreRepository(it) } ?: return
+        val success = repo.deleteVideo(video.uri)
+        if (success) {
+            // Check if there's a pending intent (Android 11+)
+            val pendingIntent = repo.lastDeleteIntent
+            if (pendingIntent != null) {
+                _deleteRequest.value = pendingIntent
+            } else {
+                // Direct delete succeeded (Android 10-)
+                removeVideoFromList(index)
+            }
+        }
+    }
+
+    /**
+     * Called after user confirms/rejects the system delete dialog.
+     * If confirmed, remove from local list.
+     */
+    fun onDeleteResult(index: Int, confirmed: Boolean) {
+        _deleteRequest.value = null
+        if (confirmed) {
+            removeVideoFromList(index)
+        }
+    }
+
+    private fun removeVideoFromList(index: Int) {
+        val videos = _videoList.value.toMutableList()
+        if (index !in videos.indices) return
+        videos.removeAt(index)
+        _videoList.value = videos
+
+        // Adjust current index
+        val currentIdx = _currentIndex.value
+        when {
+            videos.isEmpty() -> {
+                exoPlayer?.stop()
+                _errorMessage.value = "没有更多视频"
+            }
+            currentIdx >= videos.size -> {
+                playVideoAtIndex(videos.size - 1)
+            }
+            currentIdx > index -> {
+                _currentIndex.value = currentIdx - 1
+            }
+            currentIdx == index -> {
+                playVideoAtIndex(currentIdx.coerceAtMost(videos.size - 1))
+            }
+        }
+    }
+
+    /**
+     * Show heart animation (triggered by double-tap).
+     */
+    fun showHeartAnimation() {
+        heartDismissJob?.cancel()
+        _showHeart.value = true
+        heartDismissJob = viewModelScope.launch {
+            delay(1000)
+            _showHeart.value = false
+        }
     }
 
     private fun updatePlaybackState() {
