@@ -287,6 +287,7 @@ jobs:
 ## 📝 Git 提交历史
 
 ```
+c7c4e05 feat: 黑屏根治(TextureView) + Coil异步缩略图 + 手势冲突修复 + 历史清理
 0618bf3 fix: 修复编译错误 - LocalLifecycleOwner 路径回退、移除 setUseTextureView
 a27d2ce fix: 修复闪退和黑屏兼容性问题 - try-catch/error listener/keepContent/snapshotFlow
 3d00075 fix: resolve compilation errors - LocalLifecycleOwner import, drag gesture parameter types
