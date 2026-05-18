@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlin.random.Random
 
 data class PlaybackState(
     val isPlaying: Boolean = false,
@@ -59,12 +58,15 @@ class VideoPlayerViewModel(
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    private val _shouldClose = MutableStateFlow(false)
+    val shouldClose: StateFlow<Boolean> = _shouldClose.asStateFlow()
+
     var exoPlayer: ExoPlayer? = null
         private set
 
     private var countDownTimer: CountDownTimer? = null
     private var progressUpdateTimer: CountDownTimer? = null
-    private var shuffledIndices = mutableListOf<Int>()
+    private var lastPlayedIndex = -1
 
     init {
         loadVideos()
@@ -79,8 +81,8 @@ class VideoPlayerViewModel(
                     _isLoading.value = false
                     return@launch
                 }
-                _videoList.value = videos
-                shuffledIndices = generateShuffledIndices(videos.size)
+                // Shuffle the list directly for random playback order
+                _videoList.value = videos.shuffled()
                 _isLoading.value = false
             } catch (e: Exception) {
                 _errorMessage.value = "加载视频失败: ${e.message}"
@@ -101,8 +103,8 @@ class VideoPlayerViewModel(
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         updatePlaybackState()
                     }
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        if (playbackState == Player.STATE_READY) {
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_READY) {
                             updatePlaybackState()
                         }
                     }
@@ -114,21 +116,17 @@ class VideoPlayerViewModel(
 
         // Load first video
         if (_videoList.value.isNotEmpty()) {
-            playVideoAtIndex(shuffledIndices[0])
+            playVideoAtIndex(0)
             startProgressUpdater()
         }
-    }
-
-    private fun generateShuffledIndices(size: Int): MutableList<Int> {
-        val indices = (0 until size).toMutableList()
-        indices.shuffle(Random)
-        return indices
     }
 
     fun playVideoAtIndex(index: Int) {
         val videos = _videoList.value
         if (videos.isEmpty() || index !in videos.indices) return
+        if (index == lastPlayedIndex) return // Avoid redundant loads
 
+        lastPlayedIndex = index
         _currentIndex.value = index
         exoPlayer?.apply {
             val mediaItem = MediaItem.fromUri(videos[index].uri)
@@ -138,24 +136,6 @@ class VideoPlayerViewModel(
             playbackParameters = PlaybackParameters(_playbackState.value.playbackSpeed)
         }
         updatePlaybackState()
-    }
-
-    fun playNext() {
-        val videos = _videoList.value
-        if (videos.isEmpty()) return
-
-        val currentShuffledPos = shuffledIndices.indexOf(_currentIndex.value)
-        val nextShuffledPos = (currentShuffledPos + 1) % shuffledIndices.size
-        playVideoAtIndex(shuffledIndices[nextShuffledPos])
-    }
-
-    fun playPrevious() {
-        val videos = _videoList.value
-        if (videos.isEmpty()) return
-
-        val currentShuffledPos = shuffledIndices.indexOf(_currentIndex.value)
-        val prevShuffledPos = if (currentShuffledPos <= 0) shuffledIndices.size - 1 else currentShuffledPos - 1
-        playVideoAtIndex(shuffledIndices[prevShuffledPos])
     }
 
     fun togglePlayPause() {
@@ -170,6 +150,22 @@ class VideoPlayerViewModel(
         updatePlaybackState()
     }
 
+    fun seekForward(ms: Long = 10_000) {
+        exoPlayer?.let {
+            val target = (it.currentPosition + ms).coerceAtMost(it.duration)
+            it.seekTo(target)
+            updatePlaybackState()
+        }
+    }
+
+    fun seekBackward(ms: Long = 10_000) {
+        exoPlayer?.let {
+            val target = (it.currentPosition - ms).coerceAtLeast(0)
+            it.seekTo(target)
+            updatePlaybackState()
+        }
+    }
+
     fun setPlaybackSpeed(speed: Float) {
         val clampedSpeed = speed.coerceIn(0.5f, 3.0f)
         exoPlayer?.playbackParameters = PlaybackParameters(clampedSpeed)
@@ -182,10 +178,6 @@ class VideoPlayerViewModel(
 
     fun toggleControls() {
         _showControls.value = !_showControls.value
-    }
-
-    fun showControlsTemporarily() {
-        _showControls.value = true
     }
 
     fun hideControls() {
@@ -205,7 +197,6 @@ class VideoPlayerViewModel(
                 _timerState.value = TimerState()
                 exoPlayer?.pause()
                 _playbackState.value = _playbackState.value.copy(isPlaying = false)
-                // 触发关闭事件
                 _shouldClose.value = true
             }
         }.start()
@@ -217,23 +208,8 @@ class VideoPlayerViewModel(
         _timerState.value = TimerState()
     }
 
-    private val _shouldClose = MutableStateFlow(false)
-    val shouldClose: StateFlow<Boolean> = _shouldClose.asStateFlow()
-
     fun consumeCloseEvent() {
         _shouldClose.value = false
-    }
-
-    fun formatTimerDisplay(ms: Long): String {
-        val totalSeconds = ms / 1000
-        val hours = totalSeconds / 3600
-        val minutes = (totalSeconds % 3600) / 60
-        val seconds = totalSeconds % 60
-        return if (hours > 0) {
-            String.format("%02d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            String.format("%02d:%02d", minutes, seconds)
-        }
     }
 
     private fun updatePlaybackState() {
@@ -255,10 +231,6 @@ class VideoPlayerViewModel(
             }
             override fun onFinish() {}
         }.start()
-    }
-
-    fun clearError() {
-        _errorMessage.value = null
     }
 
     override fun onCleared() {

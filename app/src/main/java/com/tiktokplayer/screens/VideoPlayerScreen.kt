@@ -2,11 +2,11 @@ package com.tiktokplayer.screens
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
-import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -19,25 +19,23 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.tiktokplayer.components.PlayerControlsOverlay
 import com.tiktokplayer.viewmodel.VideoPlayerViewModel
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -47,7 +45,6 @@ fun VideoPlayerScreen(viewModel: VideoPlayerViewModel) {
     val lifecycleOwner = LocalLifecycleOwner.current
 
     val videoList by viewModel.videoList.collectAsState()
-    val currentIndex by viewModel.currentIndex.collectAsState()
     val playbackState by viewModel.playbackState.collectAsState()
     val timerState by viewModel.timerState.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -56,15 +53,9 @@ fun VideoPlayerScreen(viewModel: VideoPlayerViewModel) {
     val errorMessage by viewModel.errorMessage.collectAsState()
     val shouldClose by viewModel.shouldClose.collectAsState()
 
-    var playerView by remember { mutableStateOf<PlayerView?>(null) }
-    var initialized by remember { mutableStateOf(false) }
-
-    // Initialize player
+    // Initialize player once
     LaunchedEffect(Unit) {
-        if (!initialized) {
-            viewModel.initializePlayer(context)
-            initialized = true
-        }
+        viewModel.initializePlayer(context)
     }
 
     // Handle landscape/portrait rotation
@@ -84,41 +75,38 @@ fun VideoPlayerScreen(viewModel: VideoPlayerViewModel) {
         }
     }
 
-    // Keep screen on while playing
-    DisposableEffect(playbackState.isPlaying) {
-        if (playbackState.isPlaying) {
-            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
-            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-        onDispose {
-            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    // Auto-hide controls after 3 seconds of inactivity
+    LaunchedEffect(showControls, playbackState.isPlaying) {
+        if (showControls && playbackState.isPlaying) {
+            delay(3000)
+            viewModel.hideControls()
         }
     }
 
-    // Lifecycle observer for pause/resume
+    // Keep screen on while playing
+    DisposableEffect(playbackState.isPlaying) {
+        val window = activity?.window
+        if (playbackState.isPlaying) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    // Lifecycle observer
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_PAUSE -> {
-                    viewModel.exoPlayer?.pause()
-                }
-                Lifecycle.Event.ON_RESUME -> {
-                    // Don't auto-resume, let user tap to play
-                }
+                Lifecycle.Event.ON_PAUSE -> viewModel.exoPlayer?.pause()
                 else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-
-    // Set up player view when player is ready
-    LaunchedEffect(viewModel.exoPlayer) {
-        viewModel.exoPlayer?.let { player ->
-            playerView?.player = player
         }
     }
 
@@ -153,87 +141,105 @@ fun VideoPlayerScreen(viewModel: VideoPlayerViewModel) {
                 )
             }
             else -> {
-                // Vertical pager for swiping between videos
-                val pagerState = rememberPagerState(
-                    initialPage = 0,
-                    pageCount = { videoList.size }
+                VideoPager(
+                    viewModel = viewModel,
+                    videoList = videoList,
+                    playbackState = playbackState,
+                    timerState = timerState,
+                    isLandscape = isLandscape,
+                    showControls = showControls,
+                    activity = activity
                 )
+            }
+        }
+    }
+}
 
-                // Sync pager with current index
-                LaunchedEffect(currentIndex) {
-                    if (pagerState.currentPage != currentIndex) {
-                        pagerState.animateScrollToPage(currentIndex)
-                    }
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun VideoPager(
+    viewModel: VideoPlayerViewModel,
+    videoList: List<com.tiktokplayer.data.VideoItem>,
+    playbackState: com.tiktokplayer.viewmodel.PlaybackState,
+    timerState: com.tiktokplayer.viewmodel.TimerState,
+    isLandscape: Boolean,
+    showControls: Boolean,
+    activity: Activity?
+) {
+    val pagerState = rememberPagerState(pageCount = { videoList.size })
+
+    // When ViewModel changes video (e.g. timer end), sync pager
+    val currentIndex by viewModel.currentIndex.collectAsState()
+    LaunchedEffect(currentIndex) {
+        if (pagerState.currentPage != currentIndex && !pagerState.isScrollInProgress) {
+            pagerState.animateScrollToPage(currentIndex)
+        }
+    }
+
+    VerticalPager(
+        state = pagerState,
+        modifier = Modifier.fillMaxSize()
+    ) { page ->
+        val isCurrentPage = page == pagerState.currentPage
+
+        // When this page becomes current, load its video
+        LaunchedEffect(isCurrentPage) {
+            if (isCurrentPage) {
+                viewModel.playVideoAtIndex(page)
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) {
+                    viewModel.toggleControls()
                 }
-
-                // Sync current index with pager
-                LaunchedEffect(pagerState) {
-                    snapshotFlow { pagerState.currentPage }.collect { page ->
-                        if (page != currentIndex) {
-                            viewModel.playVideoAtIndex(page)
+        ) {
+            // ExoPlayer View - only attach player to current page
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        useController = false
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                    }
+                },
+                update = { view ->
+                    if (isCurrentPage) {
+                        // Attach player to current page
+                        if (view.player !== viewModel.exoPlayer) {
+                            view.player = viewModel.exoPlayer
+                        }
+                    } else {
+                        // Detach player from non-current pages
+                        if (view.player != null) {
+                            view.player = null
                         }
                     }
-                }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
 
-                VerticalPager(
-                    state = pagerState,
-                    modifier = Modifier.fillMaxSize(),
-                    beyondBoundsPageCount = 1
-                ) { page ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.Black)
-                    ) {
-                        // ExoPlayer View
-                        AndroidView(
-                            factory = { ctx ->
-                                PlayerView(ctx).apply {
-                                    useController = false
-                                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                    setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-                                    visibility = View.VISIBLE
-
-                                    // Ensure proper layout
-                                    layoutParams = FrameLayout.LayoutParams(
-                                        FrameLayout.LayoutParams.MATCH_PARENT,
-                                        FrameLayout.LayoutParams.MATCH_PARENT
-                                    )
-
-                                    playerView = this
-                                    viewModel.exoPlayer?.let { player ->
-                                        this.player = player
-                                    }
-                                }
-                            },
-                            update = { view ->
-                                viewModel.exoPlayer?.let { player ->
-                                    if (view.player !== player) {
-                                        view.player = player
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-
-                        // Player controls overlay
-                        if (showControls && page == pagerState.currentPage) {
-                            PlayerControlsOverlay(
-                                playbackState = playbackState,
-                                timerState = timerState,
-                                videoName = videoList.getOrNull(page)?.displayName ?: "",
-                                isLandscape = isLandscape,
-                                onTogglePlayPause = { viewModel.togglePlayPause() },
-                                onSeek = { viewModel.seekTo(it) },
-                                onSpeedChange = { viewModel.setPlaybackSpeed(it) },
-                                onToggleLandscape = { viewModel.toggleLandscape() },
-                                onSetTimer = { viewModel.setTimer(it) },
-                                onCancelTimer = { viewModel.cancelTimer() },
-                                onClose = { activity?.finish() }
-                            )
-                        }
-                    }
-                }
+            // Player controls overlay - only on current page
+            if (isCurrentPage && showControls) {
+                PlayerControlsOverlay(
+                    playbackState = playbackState,
+                    timerState = timerState,
+                    videoName = videoList.getOrNull(page)?.displayName ?: "",
+                    isLandscape = isLandscape,
+                    onTogglePlayPause = { viewModel.togglePlayPause() },
+                    onSeek = { viewModel.seekTo(it) },
+                    onSpeedChange = { viewModel.setPlaybackSpeed(it) },
+                    onToggleLandscape = { viewModel.toggleLandscape() },
+                    onSetTimer = { viewModel.setTimer(it) },
+                    onCancelTimer = { viewModel.cancelTimer() },
+                    onClose = { activity?.finish() }
+                )
             }
         }
     }
