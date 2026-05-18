@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.VerticalPager
@@ -33,8 +34,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.AwaitPointerEventScope
-import androidx.compose.ui.input.pointer.awaitFirstDown
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -508,9 +507,8 @@ private enum class DragType { NONE, BRIGHTNESS, VOLUME }
 
 /**
  * Direction-aware vertical drag gesture detector.
- * Waits for the user to move their finger past a threshold before activating,
- * and only activates if the movement is predominantly vertical.
- * This prevents conflicts with VerticalPager's page-swipe gesture.
+ * Only activates when vertical movement exceeds horizontal movement,
+ * preventing conflicts with VerticalPager's page-swipe gesture.
  */
 private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectVerticalDragGesturesWithDirection(
     onDragStart: (androidx.compose.ui.geometry.Offset) -> Unit,
@@ -518,35 +516,34 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectVe
     onDragEnd: () -> Unit,
     onDragCancel: () -> Unit
 ) {
-    val directionThreshold = 10f
+    val threshold = 10f
     awaitPointerEventScope {
-        val down = awaitFirstDown(requireUnconsumed = false)
-        var dragStarted = false
+        // Wait for first touch
+        val down = awaitPointerEvent().changes.firstOrNull() ?: return@awaitPointerEventScope
+        down.consume()
         val startOffset = down.position
+        var dragStarted = false
 
         while (true) {
             val event = awaitPointerEvent()
             val change = event.changes.firstOrNull() ?: continue
 
             if (!change.pressed) {
-                // Finger lifted
                 if (dragStarted) onDragEnd()
                 break
             }
 
-            val currentPosition = change.position
-            val dx = kotlin.math.abs(currentPosition.x - startOffset.x)
-            val dy = kotlin.math.abs(currentPosition.y - startOffset.y)
+            val dx = kotlin.math.abs(change.position.x - startOffset.x)
+            val dy = kotlin.math.abs(change.position.y - startOffset.y)
 
             if (!dragStarted) {
-                if (dx > directionThreshold || dy > directionThreshold) {
+                if (dx > threshold || dy > threshold) {
                     if (dy > dx) {
                         dragStarted = true
                         onDragStart(startOffset)
                         change.consume()
                     } else {
-                        // Horizontal intent — abort, let pager handle
-                        break
+                        break // horizontal intent, let pager handle
                     }
                 }
             } else {
