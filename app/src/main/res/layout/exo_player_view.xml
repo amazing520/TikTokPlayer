@@ -6,6 +6,6 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     app:surface_type="texture_view"
-    app:resize_mode="zoom"
+    app:resize_mode="fit"
     app:show_buffering="never"
     app:use_controller="false" />

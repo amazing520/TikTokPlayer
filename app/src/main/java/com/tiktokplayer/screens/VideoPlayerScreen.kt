@@ -294,14 +294,14 @@ private fun VideoPager(
             // TextureView is more compatible with Compose and avoids black screen on many devices
             AndroidView(
                 factory = { ctx ->
-                    val view = LayoutInflater.from(ctx).inflate(R.layout.exo_player_view, null)
-                    view.findViewById<PlayerView>(R.id.player_view).apply {
-                        setKeepContentOnPlayerReset(true)
-                    }
-                    view
+                    val wrapper = android.widget.FrameLayout(ctx)
+                    LayoutInflater.from(ctx).inflate(R.layout.exo_player_view, wrapper, true)
+                    val playerView = wrapper.findViewById<PlayerView>(R.id.player_view)
+                    playerView.setKeepContentOnPlayerReset(true)
+                    wrapper
                 },
-                update = { view ->
-                    val playerView = view.findViewById<PlayerView>(R.id.player_view)
+                update = { wrapper ->
+                    val playerView = wrapper.findViewById<PlayerView>(R.id.player_view)
                     if (isCurrentPage) {
                         if (playerView.player !== viewModel.exoPlayer) {
                             playerView.player = viewModel.exoPlayer
