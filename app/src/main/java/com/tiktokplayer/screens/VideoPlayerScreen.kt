@@ -284,7 +284,7 @@ private fun VideoPager(
             val isLongPressSpeed by viewModel.isLongPressSpeed.collectAsState()
             if (isLongPressSpeed) {
                 Text(
-                    text = "3x",
+                    text = "2x",
                     color = Color.White,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,

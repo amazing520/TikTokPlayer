@@ -225,8 +225,8 @@ class VideoPlayerViewModel(
         if (_isLongPressSpeed.value) return
         speedBeforeLongPress = _playbackState.value.playbackSpeed
         _isLongPressSpeed.value = true
-        exoPlayer?.playbackParameters = PlaybackParameters(3.0f)
-        _playbackState.value = _playbackState.value.copy(playbackSpeed = 3.0f)
+        exoPlayer?.playbackParameters = PlaybackParameters(2.0f)
+        _playbackState.value = _playbackState.value.copy(playbackSpeed = 2.0f)
     }
 
     /**
