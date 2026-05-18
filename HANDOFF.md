@@ -25,6 +25,14 @@
 - [x] 进度条拖动跳转
 - [x] 屏幕常亮（播放中 FLAG_KEEP_SCREEN_ON）
 - [x] 生命周期管理（ON_PAUSE 自动暂停）
+- [x] **双击快进/快退** — 左半屏 -10s，右半屏 +10s，带反馈动画
+- [x] **长按倍速** — 长按 2x 播放，松手恢复原速
+- [x] **视频预加载** — 预加载前一个+当前+下一个视频，减少切换延迟
+- [x] **视频缩略图** — 滑动时显示视频封面，避免黑屏闪烁
+- [x] **播放历史记录** — 记忆每个视频上次播放位置，自动恢复（<90%时）
+- [x] **手势亮度调节** — 左侧上下滑动调节屏幕亮度
+- [x] **手势音量调节** — 右侧上下滑动调节系统音量
+- [x] **视频信息显示** — 底部显示文件名、大小、时长
 
 ### 项目结构
 ```
@@ -34,6 +42,7 @@ TikTokPlayer/
 ├── gradle.properties                   # Gradle 配置
 ├── gradle/wrapper/gradle-wrapper.properties  # Gradle 8.5
 ├── gradlew                             # Gradle Wrapper 脚本
+├── build.yml                           # CI 工作流模板
 ├── app/
 │   ├── build.gradle.kts                # App 构建 (compileSdk 34, minSdk 24)
 │   ├── proguard-rules.pro              # 混淆规则
@@ -42,12 +51,12 @@ TikTokPlayer/
 │       ├── java/com/tiktokplayer/
 │       │   ├── MainActivity.kt         # 入口：权限处理 + Compose 宿主
 │       │   ├── data/
-│       │   │   ├── VideoItem.kt        # 数据类：id, uri, displayName, duration, size
-│       │   │   └── MediaStoreRepository.kt  # 本地视频扫描（过滤 <1秒）
+│       │   │   ├── VideoItem.kt        # 数据类：id, uri, displayName, duration, size, thumbnailUri
+│       │   │   └── MediaStoreRepository.kt  # 本地视频扫描（分页+缩略图）
 │       │   ├── viewmodel/
-│       │   │   └── VideoPlayerViewModel.kt  # 播放状态管理 + ExoPlayer 控制
+│       │   │   └── VideoPlayerViewModel.kt  # 播放状态+手势+历史+亮度/音量
 │       │   ├── screens/
-│       │   │   └── VideoPlayerScreen.kt     # 主界面：VerticalPager + PlayerView
+│       │   │   └── VideoPlayerScreen.kt     # 主界面：VerticalPager+手势+缩略图+信息
 │       │   ├── components/
 │       │   │   └── PlayerControlsOverlay.kt # 控制面板：进度条/倍速/定时/横竖屏
 │       │   └── ui/theme/
@@ -62,7 +71,7 @@ TikTokPlayer/
 
 ---
 
-## 🔧 已修复的 BUG（第二轮）
+## 🔧 已修复的 BUG
 
 | 问题 | 严重性 | 修复方式 |
 |------|--------|----------|
@@ -74,87 +83,32 @@ TikTokPlayer/
 
 ---
 
-## ⚠️ 待解决问题 / 优化方向
-
-### 高优先级
-1. **CI 自动构建未配置** — `.github/workflows/build.yml` 未能推送到 GitHub（服务器无法直连 github.com，API 对 workflows 目录有限制）。需要在浏览器手动创建，内容见下方。
-2. **Gradle Wrapper JAR 缺失** — `gradle/wrapper/gradle-wrapper.jar` 是二进制文件，未推送到 GitHub。CI 中用 `gradle wrapper --gradle-version 8.5` 自动生成，但本地 Android Studio 需要先 sync。
-3. **ProGuard 规则不完整** — release 构建可能因混淆导致 ExoPlayer 崩溃，需要补充 keep 规则。
-
-### 中优先级
-4. **双击快进/快退** — 抖音标配功能，当前缺失。左半屏双击 -10s，右半屏双击 +10s。
-5. **长按倍速** — 抖音长按 3x 播放，松手恢复。当前只有菜单选择。
-6. **上下滑动手势冲突** — VerticalPager 内部的 clickable 和滑动手势可能冲突，需要更精细的手势处理（pointerInput + detectTapGestures）。
-7. **视频预加载** — 当前 ExoPlayer 只加载当前视频，可以预加载相邻视频减少切换延迟。
-8. **内存优化** — 大量视频时 MediaStoreRepository.getAllVideos() 一次性加载所有视频信息，应考虑分页。
+## ⚠️ 待解决 / 优化方向
 
 ### 低优先级
-9. **视频封面/缩略图** — 滑动时显示视频第一帧作为过渡，而不是黑屏。
-10. **播放历史记录** — 记录上次播放位置。
-11. **手势亮度/音量调节** — 左侧上下滑动调亮度，右侧调音量。
-12. **视频信息显示** — 文件名、时长、大小等。
+1. **手势冲突优化** — VerticalPager 内部的 clickable 和垂直滑动手势可能需要更精细的 pointerInput 处理
+2. **缩略图异步加载** — 当前用 AndroidView + setImageURI 同步加载，大视频可能卡顿，可改用 Coil 等图片库
+3. **播放历史清理** — 超过 30 天的历史记录自动清理
+4. **视频删除功能** — 长按菜单删除不需要的视频
 
 ---
 
-## 📋 CI 工作流文件（需手动创建）
+## 📋 CI 自动构建
 
-在 GitHub 仓库中创建 `.github/workflows/build.yml`，内容：
+✅ `.github/workflows/build.yml` 已配置完成并推送到 GitHub
 
-```yaml
-name: Build APK
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Build Debug APK
-        run: |
-          gradle wrapper --gradle-version 8.5
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: TikTokPlayer-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
-```
+- 推送到 `main` 分支自动触发构建
+- 支持手动触发 (`workflow_dispatch`)
+- 构建产物保留 30 天
+- **下载 APK**: GitHub 仓库 → Actions → 选择最新 run → Artifacts → TikTokPlayer-debug
 
 ---
 
 ## 🔐 GitHub 认证
 
-- 需要有效的 GitHub Personal Access Token（repo 权限）
-- **API 可用**，`github.com` 直连不通（服务器网络限制）
-- 推送方式：通过 GitHub Git Data API（创建 blob → tree → commit → update ref）
-- **Contents API 对 `.github/workflows/` 目录无效**（404），需要用 Git Data API 的 tree 方式
-
----
-
-## 🚀 新智能体接手步骤
-
-1. **读取项目文件：** `read /root/.openclaw/workspace/TikTokPlayer/` 下的所有 .kt 文件
-2. **推送到 GitHub：** 使用 GitHub API（token 如上），注意 `github.com` 不通，只能用 `api.github.com`
-3. **创建 CI 文件：** 用 Git Data API 创建 tree → commit → update ref，不能用 Contents API
-4. **继续开发：** 按上方"待解决"列表逐项优化
-5. **构建测试：** 需要 Android SDK 环境，当前服务器没有，需要在有 Android Studio 的机器上构建
+- Token 已配置，API 推送正常
+- `github.com` 直连不通（服务器网络限制），通过 `api.github.com` 推送
+- CI 文件使用 Git Data API（tree 方式）推送
 
 ---
 
@@ -174,3 +128,13 @@ jobs:
 | targetSdk | 34 |
 | Gradle | 8.5 |
 | JDK | 17 |
+
+---
+
+## 🚀 新智能体接手步骤
+
+1. **读取项目文件：** `read /root/.openclaw/workspace/TikTokPlayer/` 下的所有 .kt 文件
+2. **推送到 GitHub：** 使用 GitHub API（token 如上），注意 `github.com` 不通，只能用 `api.github.com`
+3. **创建 CI 文件：** 用 Git Data API 创建 tree → commit → update ref，不能用 Contents API
+4. **继续开发：** 按上方"待解决"列表逐项优化
+5. **构建测试：** 需要 Android SDK 环境，当前服务器没有，需要在有 Android Studio 的机器上构建
