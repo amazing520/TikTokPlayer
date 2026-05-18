@@ -88,7 +88,7 @@ TikTokPlayer/
 | 22 | 长按倍速恢复不正确 | 🟡 | 记住长按前的速度，松手后恢复 |
 | 23 | mipmap 图标缺失 | 🔴 | adaptive-icon 移到 anydpi-v26，添加 PNG fallback |
 
-### 第五轮新增功能（智能体 #4 — 当前）
+### 第五轮新增功能（智能体 #4）
 | # | 功能 | 状态 | 备注 |
 |---|------|------|------|
 | 24 | 视频缩略图 | ✅ | VideoItem 增加 thumbnailUri，通过 MediaStore.Video.Thumbnails 获取 |
@@ -98,6 +98,17 @@ TikTokPlayer/
 | 28 | 视频信息显示 | ✅ | 底部左下角显示文件名、大小（MB/GB）、时长 |
 | 29 | CI 自动构建 | ✅ | .github/workflows/build.yml 已推送，push 到 main 自动构建 |
 | 30 | 编译错误修复 | ✅ | LocalLifecycleOwner import 路径、detectVerticalDragGestures 参数名 |
+
+### 第六轮修复（智能体 #5 — 闪退 & 黑屏兼容性修复）
+| # | 问题 | 严重性 | 修复方式 |
+|---|------|--------|----------|
+| 31 | 闪退：initializePlayer 无 try-catch | 🔴 | 整个方法包裹 try-catch，失败时显示错误提示而非崩溃 |
+| 32 | 闪退：ExoPlayer 无 onPlayerError 监听 | 🔴 | 添加 Player.Listener.onPlayerError 回调，显示错误信息并 3 秒后自动清除 |
+| 33 | 黑屏：PlayerView 缺少兼容性配置 | 🔴 | 添加 setKeepContentOnPlayerReset(true)，切换视频时保留最后一帧 |
+| 34 | 闪退：saveHistory() 从未调用 | 🟡 | onCleared() 中调用 saveHistory(appContext)，播放历史现在正确持久化 |
+| 35 | 缩略图：Android 10+ API 废弃 | 🟡 | 改用 contentResolver.loadThumbnail()，旧版回退到 Video.Thumbnails |
+| 36 | 亮度：LaunchedEffect key 不响应变化 | 🟡 | 改用 snapshotFlow { viewModel.currentBrightness } 正确监听变化 |
+| 37 | CI 编译错误 | 🔴 | 移除 setUseTextureView（旧 ExoPlayer API，Media3 不存在），回退 LocalLifecycleOwner 路径 |
 
 ---
 
@@ -119,15 +130,26 @@ TikTokPlayer/
 | 4 | LocalLifecycleOwner import 路径错误 | 🔴 | 改为 `androidx.compose.ui.platform.LocalLifecycleOwner` |
 | 4 | detectVerticalDragGestures 参数名错误 | 🔴 | `onDrag` → `onVerticalDrag` |
 | 4 | dragAmount 类型推断失败 | 🟡 | 显式声明 `val delta: Float` |
+| 5 | initializePlayer 无异常保护 | 🔴 | 添加 try-catch，失败显示错误提示 |
+| 5 | ExoPlayer 无播放错误监听 | 🔴 | 添加 onPlayerError 回调 |
+| 5 | PlayerView 缺少 keepContent 配置 | 🔴 | 添加 setKeepContentOnPlayerReset(true) |
+| 5 | saveHistory 从未被调用 | 🟡 | onCleared 中调用 saveHistory |
+| 5 | 缩略图 API 在 Android 10+ 废弃 | 🟡 | 改用 loadThumbnail API |
+| 5 | 亮度 LaunchedEffect 不响应变化 | 🟡 | 改用 snapshotFlow |
+| 5 | setUseTextureView 不存在于 Media3 | 🔴 | 移除，使用默认 PlayerView 配置 |
 
 ---
 
 ## ⚠️ 待解决 / 继续优化方向
 
+### 已知问题
+1. **黑屏兼容性** — 当前使用默认 SurfaceView，在部分设备上仍可能出现黑屏。下一步可尝试：XML 布局中设置 `app:surface_type="texture_view"` 或在代码中调用 `playerView.setVideoTextureView(TextureView(context))`
+2. **缩略图缓存** — 当前用 cacheDir 存临时 JPEG 文件，可能占用空间。已有 cleanupThumbnailCache() 方法，需在合适时机调用
+
 ### 中优先级
-1. **手势冲突优化** — VerticalPager 的滑动切换与垂直拖拽（亮度/音量）可能冲突，需要更精细的 pointerInput 判断（如先判断水平位移再决定是滑页还是调参）
-2. **缩略图异步加载** — 当前用 `AndroidView + setImageURI` 同步加载，大视频缩略图可能导致卡顿，建议改用 Coil 等图片库异步加载
-3. **播放历史清理** — 超过 30 天的历史记录自动清理，避免 SharedPreferences 膨胀
+3. **手势冲突优化** — VerticalPager 的滑动切换与垂直拖拽（亮度/音量）可能冲突，需要更精细的 pointerInput 判断（如先判断水平位移再决定是滑页还是调参）
+4. **缩略图异步加载** — 当前用 contentResolver.loadThumbnail 同步加载，大视频缩略图可能导致卡顿，建议改用 Coil 等图片库异步加载
+5. **播放历史清理** — 超过 30 天的历史记录自动清理，避免 SharedPreferences 膨胀
 
 ### 低优先级
 4. **视频删除功能** — 长按菜单删除不需要的视频
@@ -250,6 +272,8 @@ jobs:
 ## 📝 Git 提交历史
 
 ```
+0618bf3 fix: 修复编译错误 - LocalLifecycleOwner 路径回退、移除 setUseTextureView
+a27d2ce fix: 修复闪退和黑屏兼容性问题 - try-catch/error listener/keepContent/snapshotFlow
 3d00075 fix: resolve compilation errors - LocalLifecycleOwner import, drag gesture parameter types
 be05581 feat: add video thumbnails, playback history, brightness/volume gestures, improved preloading
 449ae3c fix: mipmap icons - move adaptive-icon to anydpi-v26, add PNG fallbacks
@@ -270,3 +294,5 @@ e1b8300 fix: 修复滑动黑屏、同步冲突、控制栏交互
 2. **为什么 LocalLifecycleOwner 用 `androidx.compose.ui.platform` 而不是 `androidx.lifecycle.compose`？** → Compose BOM 2024.01.00 对应的版本中，后者未被识别，使用前者兼容性更好
 3. **为什么预加载用 3 个 MediaItem 而不是单独的 ExoPlayer？** → ExoPlayer 原生支持播放列表预加载，无需管理多个 Player 实例，更省内存
 4. **为什么播放历史用 SharedPreferences 而不是 Room？** → 数据量小（仅 videoId→position 映射），SharedPreferences 更简单，无需额外依赖
+5. **为什么不能用 setUseTextureView？** → 这是旧版 ExoPlayer 2 的 API，Media3 1.2.1 的 PlayerView 没有此方法。Media3 中 SurfaceView 是默认行为，TextureView 需要通过 XML `app:surface_type="texture_view"` 或 `setVideoTextureView()` 设置
+6. **为什么 LocalLifecycleOwner 用 `androidx.compose.ui.platform`？** → `lifecycle-runtime-compose:2.7.0` 还没有把 `LocalLifecycleOwner` 搬到 `androidx.lifecycle.compose`（需要 2.8.0+），用旧路径兼容
