@@ -5,10 +5,10 @@ import android.content.pm.ActivityInfo
 import android.view.WindowManager
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -19,18 +19,22 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.tiktokplayer.components.PlayerControlsOverlay
@@ -189,15 +193,47 @@ private fun VideoPager(
             }
         }
 
+        // Gesture state for long-press detection
+        var isLongPressing by remember { mutableStateOf(false) }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {
-                    viewModel.toggleControls()
+                .pointerInput(isCurrentPage) {
+                    if (!isCurrentPage) return@pointerInput
+                    detectTapGestures(
+                        onTap = {
+                            // Single tap → toggle controls
+                            viewModel.toggleControls()
+                        },
+                        onDoubleTap = { offset ->
+                            // Double tap → seek left=-10s, right=+10s
+                            val isRightHalf = offset.x > size.width / 2
+                            viewModel.doubleTapSeek(isRightHalf)
+                        },
+                        onLongPress = {
+                            // Long press → 3x speed
+                            isLongPressing = true
+                            viewModel.startLongPressSpeed()
+                        }
+                    )
+                }
+                .pointerInput(isCurrentPage, isLongPressing) {
+                    if (!isCurrentPage) return@pointerInput
+                    // Detect when long-press finger lifts
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (isLongPressing) {
+                                val allReleased = event.changes.all { !it.pressed }
+                                if (allReleased) {
+                                    isLongPressing = false
+                                    viewModel.endLongPressSpeed()
+                                }
+                            }
+                        }
+                    }
                 }
         ) {
             // ExoPlayer View - only attach player to current page
@@ -211,12 +247,10 @@ private fun VideoPager(
                 },
                 update = { view ->
                     if (isCurrentPage) {
-                        // Attach player to current page
                         if (view.player !== viewModel.exoPlayer) {
                             view.player = viewModel.exoPlayer
                         }
                     } else {
-                        // Detach player from non-current pages
                         if (view.player != null) {
                             view.player = null
                         }
@@ -224,6 +258,46 @@ private fun VideoPager(
                 },
                 modifier = Modifier.fillMaxSize()
             )
+
+            // Seek feedback overlay (e.g. "+10s", "-10s")
+            val seekFeedback by viewModel.seekFeedback.collectAsState()
+            seekFeedback?.let { feedback ->
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .background(
+                            Color.Black.copy(alpha = 0.5f),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                        )
+                        .padding(horizontal = 24.dp, vertical = 12.dp)
+                ) {
+                    Text(
+                        text = feedback,
+                        color = Color.White,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // Long-press speed indicator
+            val isLongPressSpeed by viewModel.isLongPressSpeed.collectAsState()
+            if (isLongPressSpeed) {
+                Text(
+                    text = "3x",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 100.dp)
+                        .background(
+                            Color.Black.copy(alpha = 0.5f),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                        )
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                )
+            }
 
             // Player controls overlay - only on current page
             if (isCurrentPage && showControls) {

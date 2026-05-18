@@ -12,6 +12,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.tiktokplayer.data.MediaStoreRepository
 import com.tiktokplayer.data.VideoItem
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,6 +62,16 @@ class VideoPlayerViewModel(
     private val _shouldClose = MutableStateFlow(false)
     val shouldClose: StateFlow<Boolean> = _shouldClose.asStateFlow()
 
+    // Long-press speed boost
+    private val _isLongPressSpeed = MutableStateFlow(false)
+    val isLongPressSpeed: StateFlow<Boolean> = _isLongPressSpeed.asStateFlow()
+    private var speedBeforeLongPress = 1.0f
+
+    // Double-tap seek feedback
+    private val _seekFeedback = MutableStateFlow<String?>(null)
+    val seekFeedback: StateFlow<String?> = _seekFeedback.asStateFlow()
+    private var seekFeedbackDismissJob: kotlinx.coroutines.Job? = null
+
     var exoPlayer: ExoPlayer? = null
         private set
 
@@ -75,20 +86,35 @@ class VideoPlayerViewModel(
     private fun loadVideos() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val videos = repository.getAllVideos()
-                if (videos.isEmpty()) {
+                // Load first batch for fast startup
+                val firstBatch = repository.getVideosPaged(limit = PAGE_SIZE, offset = 0)
+                if (firstBatch.isEmpty()) {
                     _errorMessage.value = "未找到本地视频文件"
                     _isLoading.value = false
                     return@launch
                 }
-                // Shuffle the list directly for random playback order
-                _videoList.value = videos.shuffled()
+                _videoList.value = firstBatch.shuffled()
                 _isLoading.value = false
+
+                // Load remaining videos in background
+                val totalCount = repository.getVideoCount()
+                if (totalCount > PAGE_SIZE) {
+                    val remaining = repository.getVideosPaged(
+                        limit = totalCount - PAGE_SIZE,
+                        offset = PAGE_SIZE
+                    )
+                    val currentList = _videoList.value
+                    _videoList.value = (currentList + remaining.shuffled())
+                }
             } catch (e: Exception) {
                 _errorMessage.value = "加载视频失败: ${e.message}"
                 _isLoading.value = false
             }
         }
+    }
+
+    companion object {
+        private const val PAGE_SIZE = 50
     }
 
     fun initializePlayer(context: Context) {
@@ -129,8 +155,16 @@ class VideoPlayerViewModel(
         lastPlayedIndex = index
         _currentIndex.value = index
         exoPlayer?.apply {
-            val mediaItem = MediaItem.fromUri(videos[index].uri)
-            setMediaItem(mediaItem)
+            val currentMediaItem = MediaItem.fromUri(videos[index].uri)
+
+            // Build playlist with current + next video for preloading
+            val mediaItems = mutableListOf(currentMediaItem)
+            val nextIndex = (index + 1) % videos.size
+            if (nextIndex != index) {
+                mediaItems.add(MediaItem.fromUri(videos[nextIndex].uri))
+            }
+
+            setMediaItems(mediaItems, 0, 0L)
             prepare()
             playWhenReady = true
             playbackParameters = PlaybackParameters(_playbackState.value.playbackSpeed)
@@ -155,6 +189,7 @@ class VideoPlayerViewModel(
             val target = (it.currentPosition + ms).coerceAtMost(it.duration)
             it.seekTo(target)
             updatePlaybackState()
+            showSeekFeedback("+${ms / 1000}s")
         }
     }
 
@@ -163,7 +198,45 @@ class VideoPlayerViewModel(
             val target = (it.currentPosition - ms).coerceAtLeast(0)
             it.seekTo(target)
             updatePlaybackState()
+            showSeekFeedback("-${ms / 1000}s")
         }
+    }
+
+    /**
+     * Double-tap seek: left half = -10s, right half = +10s
+     */
+    fun doubleTapSeek(isRightHalf: Boolean) {
+        if (isRightHalf) seekForward(10_000) else seekBackward(10_000)
+    }
+
+    private fun showSeekFeedback(text: String) {
+        seekFeedbackDismissJob?.cancel()
+        _seekFeedback.value = text
+        seekFeedbackDismissJob = viewModelScope.launch {
+            delay(800)
+            _seekFeedback.value = null
+        }
+    }
+
+    /**
+     * Start long-press 3x speed (called on pointer down with hold)
+     */
+    fun startLongPressSpeed() {
+        if (_isLongPressSpeed.value) return
+        speedBeforeLongPress = _playbackState.value.playbackSpeed
+        _isLongPressSpeed.value = true
+        exoPlayer?.playbackParameters = PlaybackParameters(3.0f)
+        _playbackState.value = _playbackState.value.copy(playbackSpeed = 3.0f)
+    }
+
+    /**
+     * End long-press speed (restore previous speed)
+     */
+    fun endLongPressSpeed() {
+        if (!_isLongPressSpeed.value) return
+        _isLongPressSpeed.value = false
+        exoPlayer?.playbackParameters = PlaybackParameters(speedBeforeLongPress)
+        _playbackState.value = _playbackState.value.copy(playbackSpeed = speedBeforeLongPress)
     }
 
     fun setPlaybackSpeed(speed: Float) {

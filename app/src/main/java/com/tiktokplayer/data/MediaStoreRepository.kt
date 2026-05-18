@@ -6,7 +6,42 @@ import android.provider.MediaStore
 
 class MediaStoreRepository(private val context: Context) {
 
+    /**
+     * Load all videos (for backward compatibility).
+     * Filters out videos shorter than 1 second.
+     */
     fun getAllVideos(): List<VideoItem> {
+        return queryVideos(limit = null, offset = null)
+    }
+
+    /**
+     * Load videos with pagination support.
+     * @param limit Maximum number of videos to return
+     * @param offset Number of videos to skip
+     * @return List of VideoItem for this page
+     */
+    fun getVideosPaged(limit: Int, offset: Int): List<VideoItem> {
+        return queryVideos(limit = limit, offset = offset)
+    }
+
+    /**
+     * Get total video count (for pagination metadata).
+     */
+    fun getVideoCount(): Int {
+        var count = 0
+        context.contentResolver.query(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Video.Media._ID),
+            "${MediaStore.Video.Media.DURATION} > ?",
+            arrayOf("1000"),
+            null
+        )?.use { cursor ->
+            count = cursor.count
+        }
+        return count
+    }
+
+    private fun queryVideos(limit: Int?, offset: Int?): List<VideoItem> {
         val videos = mutableListOf<VideoItem>()
 
         val projection = arrayOf(
@@ -21,8 +56,8 @@ class MediaStoreRepository(private val context: Context) {
         context.contentResolver.query(
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
             projection,
-            null,
-            null,
+            "${MediaStore.Video.Media.DURATION} > ?",
+            arrayOf("1000"),
             sortOrder
         )?.use { cursor ->
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
@@ -30,7 +65,17 @@ class MediaStoreRepository(private val context: Context) {
             val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
             val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
 
-            while (cursor.moveToNext()) {
+            // Skip to offset
+            val skipCount = offset ?: 0
+            var skipped = 0
+            while (skipped < skipCount && cursor.moveToNext()) {
+                skipped++
+            }
+
+            // Read up to limit
+            val maxCount = limit ?: Int.MAX_VALUE
+            var read = 0
+            while (read < maxCount && cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
                 val name = cursor.getString(nameCol) ?: "未知视频"
                 val duration = cursor.getLong(durationCol)
@@ -38,11 +83,8 @@ class MediaStoreRepository(private val context: Context) {
                 val uri = ContentUris.withAppendedId(
                     MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id
                 )
-
-                // 只加载时长大于1秒的视频
-                if (duration > 1000) {
-                    videos.add(VideoItem(id, uri, name, duration, size))
-                }
+                videos.add(VideoItem(id, uri, name, duration, size))
+                read++
             }
         }
 

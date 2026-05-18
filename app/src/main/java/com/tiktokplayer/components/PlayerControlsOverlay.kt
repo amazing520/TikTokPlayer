@@ -51,6 +51,7 @@ import com.tiktokplayer.ui.theme.AccentRed
 import com.tiktokplayer.ui.theme.ControlBackground
 import com.tiktokplayer.ui.theme.White
 import com.tiktokplayer.ui.theme.White50
+import com.tiktokplayer.ui.theme.White30
 import com.tiktokplayer.ui.theme.White70
 import com.tiktokplayer.viewmodel.PlaybackState
 import com.tiktokplayer.viewmodel.TimerState
