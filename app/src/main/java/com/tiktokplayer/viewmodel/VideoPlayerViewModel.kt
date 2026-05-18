@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -92,6 +93,7 @@ class VideoPlayerViewModel(
 
     // Playback history: videoId -> last position in ms
     private var playbackHistory = mutableMapOf<Long, Long>()
+    private var appContext: Context? = null
 
     init {
         loadVideos()
@@ -132,40 +134,56 @@ class VideoPlayerViewModel(
     fun initializePlayer(context: Context) {
         if (exoPlayer != null) return
 
-        // Initialize audio manager for volume control
-        audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        audioManager?.let {
-            val maxVol = it.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            val curVol = it.getStreamVolume(AudioManager.STREAM_MUSIC)
-            currentVolume = curVol.toFloat() / maxVol.coerceAtLeast(1)
-        }
+        try {
+            // Store context for history persistence
+            appContext = context.applicationContext
 
-        // Load playback history from SharedPreferences
-        loadHistory(context)
-
-        exoPlayer = ExoPlayer.Builder(context)
-            .build()
-            .apply {
-                repeatMode = Player.REPEAT_MODE_ONE
-                playWhenReady = true
-                addListener(object : Player.Listener {
-                    override fun onIsPlayingChanged(isPlaying: Boolean) {
-                        updatePlaybackState()
-                    }
-                    override fun onPlaybackStateChanged(state: Int) {
-                        if (state == Player.STATE_READY) {
-                            updatePlaybackState()
-                        }
-                    }
-                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        updatePlaybackState()
-                    }
-                })
+            // Initialize audio manager for volume control
+            audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager?.let {
+                val maxVol = it.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                val curVol = it.getStreamVolume(AudioManager.STREAM_MUSIC)
+                currentVolume = curVol.toFloat() / maxVol.coerceAtLeast(1)
             }
 
-        if (_videoList.value.isNotEmpty()) {
-            playVideoAtIndex(0)
-            startProgressUpdater()
+            // Load playback history from SharedPreferences
+            loadHistory(context)
+
+            exoPlayer = ExoPlayer.Builder(context)
+                .build()
+                .apply {
+                    repeatMode = Player.REPEAT_MODE_ONE
+                    playWhenReady = true
+                    addListener(object : Player.Listener {
+                        override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            updatePlaybackState()
+                        }
+                        override fun onPlaybackStateChanged(state: Int) {
+                            if (state == Player.STATE_READY) {
+                                updatePlaybackState()
+                            }
+                        }
+                        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                            updatePlaybackState()
+                        }
+                        override fun onPlayerError(error: PlaybackException) {
+                            // Don't crash — show error message and try to recover
+                            _errorMessage.value = "播放出错: ${error.message ?: "未知错误"}"
+                            // Auto-clear error after 3 seconds
+                            viewModelScope.launch {
+                                delay(3000)
+                                _errorMessage.value = null
+                            }
+                        }
+                    })
+                }
+
+            if (_videoList.value.isNotEmpty()) {
+                playVideoAtIndex(0)
+                startProgressUpdater()
+            }
+        } catch (e: Exception) {
+            _errorMessage.value = "播放器初始化失败: ${e.message}"
         }
     }
 
@@ -419,6 +437,7 @@ class VideoPlayerViewModel(
     override fun onCleared() {
         super.onCleared()
         saveCurrentPosition()
+        saveHistory(appContext)
         progressUpdateJob?.cancel()
         countDownTimer?.cancel()
         exoPlayer?.release()

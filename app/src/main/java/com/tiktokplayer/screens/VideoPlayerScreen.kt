@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -35,12 +36,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.Player
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.tiktokplayer.components.PlayerControlsOverlay
 import com.tiktokplayer.viewmodel.VideoPlayerViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -101,16 +104,28 @@ fun VideoPlayerScreen(viewModel: VideoPlayerViewModel) {
         }
     }
 
-    // Apply brightness changes to window
-    LaunchedEffect(viewModel.currentBrightness) {
-        viewModel.applyBrightnessToWindow(activity?.window)
+    // Apply brightness changes to window — use snapshotFlow to observe non-State property
+    LaunchedEffect(Unit) {
+        snapshotFlow { viewModel.currentBrightness }
+            .distinctUntilChanged()
+            .collect { brightness ->
+                val window = activity?.window
+                window?.let {
+                    val layoutParams = it.attributes
+                    layoutParams.screenBrightness = brightness
+                    it.attributes = layoutParams
+                }
+            }
     }
 
-    // Lifecycle observer
+    // Lifecycle observer — pause on ON_PAUSE, release on ON_DESTROY
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> viewModel.exoPlayer?.pause()
+                Lifecycle.Event.ON_RESUME -> {
+                    // Don't auto-resume; user taps play manually
+                }
                 else -> {}
             }
         }
@@ -201,7 +216,7 @@ private fun VideoPager(
 
         // Gesture state
         var isLongPressing by remember { mutableStateOf(false) }
-        var dragType by remember { mutableStateOf(DragType.NONE) } // LEFT=Brightness, RIGHT=Volume
+        var dragType by remember { mutableStateOf(DragType.NONE) }
         var dragStartY by remember { mutableFloatStateOf(0f) }
         var dragCurrentValue by remember { mutableFloatStateOf(0f) }
 
@@ -279,27 +294,18 @@ private fun VideoPager(
                     )
                 }
         ) {
-            // Thumbnail background (shown while video loads)
-            val videoItem = videoList.getOrNull(page)
-            if (videoItem?.thumbnailUri != null && isCurrentPage) {
-                AndroidView(
-                    factory = { ctx ->
-                        android.widget.ImageView(ctx).apply {
-                            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
-                            setImageURI(videoItem.thumbnailUri)
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            // ExoPlayer View - only attach to current page
+            // ExoPlayer View — use TextureView for broader device compatibility
+            // This is the key fix for black screen on many devices
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         useController = false
                         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                         setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                        // Fix black screen: use TextureView instead of SurfaceView
+                        setUseTextureView(true)
+                        // Keep last frame on player reset (prevents black flash)
+                        setKeepContentOnPlayerReset(true)
                     }
                 },
                 update = { view ->
@@ -388,6 +394,7 @@ private fun VideoPager(
             }
 
             // Video info overlay (bottom-left, always visible)
+            val videoItem = videoList.getOrNull(page)
             videoItem?.let { video ->
                 androidx.compose.foundation.layout.Column(
                     modifier = Modifier
