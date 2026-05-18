@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.TikTokPlayer" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowFullscreen">true</item>
+    <!-- Use Material3 or AppCompat theme for proper Android 16 compatibility -->
+    <style name="Theme.TikTokPlayer" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Allow content to extend into cutout area on all API levels -->
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <!-- Required for edge-to-edge on Android 15+ -->
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
     </style>
 </resources>

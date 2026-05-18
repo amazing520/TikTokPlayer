@@ -13,7 +13,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.TikTokPlayer"
         android:enableOnBackInvokedCallback="true"
-        tools:targetApi="tiramisu">
+        tools:targetApi="vanillaIceCream">
 
         <activity
             android:name=".MainActivity"

@@ -2,8 +2,6 @@ package com.tiktokplayer.viewmodel
 
 import android.content.Context
 import android.media.AudioManager
-import android.provider.Settings
-import android.view.WindowManager
 import android.os.CountDownTimer
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -147,7 +145,6 @@ class VideoPlayerViewModel(
         if (exoPlayer != null) return
 
         try {
-            // Store context for history persistence
             appContext = context.applicationContext
 
             // Initialize audio manager for volume control
@@ -181,10 +178,15 @@ class VideoPlayerViewModel(
                         override fun onPlayerError(error: PlaybackException) {
                             // Don't crash — show error message and try to recover
                             _errorMessage.value = "播放出错: ${error.message ?: "未知错误"}"
-                            // Auto-clear error after 3 seconds
+                            // Try to recover: skip to next video on error
                             viewModelScope.launch {
-                                delay(3000)
+                                delay(2000)
                                 _errorMessage.value = null
+                                val videos = _videoList.value
+                                val nextIdx = (_currentIndex.value + 1) % videos.size.coerceAtLeast(1)
+                                if (videos.isNotEmpty()) {
+                                    playVideoAtIndex(nextIdx)
+                                }
                             }
                         }
                     })
@@ -210,38 +212,31 @@ class VideoPlayerViewModel(
         lastPlayedIndex = index
         _currentIndex.value = index
         exoPlayer?.apply {
-            // Build media items: previous (for quick swipe back) + current + next
-            val mediaItems = mutableListOf<MediaItem>()
-            val prevIndex = (index - 1 + videos.size) % videos.size
-            val nextIndex = (index + 1) % videos.size
+            try {
+                val mediaItems = videos.map { MediaItem.fromUri(it.uri) }
+                setMediaItems(mediaItems, index, 0L)
+                prepare()
+                playWhenReady = true
 
-            // Add prev, current, next — ExoPlayer will buffer ahead
-            if (prevIndex != index) {
-                mediaItems.add(MediaItem.fromUri(videos[prevIndex].uri))
-            }
-            mediaItems.add(MediaItem.fromUri(videos[index].uri))
-            if (nextIndex != index && nextIndex != prevIndex) {
-                mediaItems.add(MediaItem.fromUri(videos[nextIndex].uri))
-            }
-
-            // The current video is at position 1 if prev exists, else 0
-            val currentMediaItemIndex = if (prevIndex != index) 1 else 0
-            setMediaItems(mediaItems, currentMediaItemIndex, 0L)
-            prepare()
-            playWhenReady = true
-
-            // Restore last position for this video (if within last 90% of duration)
-            val savedPos = playbackHistory[videos[index].id]
-            if (savedPos != null && savedPos > 0) {
-                val duration = videos[index].duration
-                if (duration > 0 && savedPos < duration * 0.9) {
-                    seekTo(savedPos)
+                // Restore last position for this video (if within last 90% of duration)
+                val savedPos = playbackHistory[videos[index].id]
+                if (savedPos != null && savedPos > 0) {
+                    val duration = videos[index].duration
+                    if (duration > 0 && savedPos < duration * 0.9) {
+                        seekTo(savedPos)
+                    }
                 }
-            }
 
-            // Preserve current speed (don't override if long-pressing)
-            if (!_isLongPressSpeed.value) {
-                playbackParameters = PlaybackParameters(_playbackState.value.playbackSpeed)
+                // Preserve current speed (don't override if long-pressing)
+                if (!_isLongPressSpeed.value) {
+                    playbackParameters = PlaybackParameters(_playbackState.value.playbackSpeed)
+                }
+            } catch (e: Exception) {
+                _errorMessage.value = "播放失败: ${e.message}"
+                viewModelScope.launch {
+                    delay(3000)
+                    _errorMessage.value = null
+                }
             }
         }
         updatePlaybackState()
@@ -256,7 +251,6 @@ class VideoPlayerViewModel(
 
     fun seekTo(positionMs: Long) {
         exoPlayer?.seekTo(positionMs)
-        // Update immediately so UI reflects the new position without 500ms delay
         updatePlaybackState()
     }
 
@@ -306,9 +300,6 @@ class VideoPlayerViewModel(
         _playbackState.value = _playbackState.value.copy(playbackSpeed = speedBeforeLongPress)
     }
 
-    /**
-     * Reset long-press state (called when swiping to another page)
-     */
     fun resetLongPress() {
         if (_isLongPressSpeed.value) {
             _isLongPressSpeed.value = false
@@ -319,7 +310,6 @@ class VideoPlayerViewModel(
 
     fun setPlaybackSpeed(speed: Float) {
         val clampedSpeed = speed.coerceIn(0.5f, 3.0f)
-        // If long-pressing, update the "before" speed so it restores to this
         if (_isLongPressSpeed.value) {
             speedBeforeLongPress = clampedSpeed
         }
@@ -367,11 +357,6 @@ class VideoPlayerViewModel(
         _shouldClose.value = false
     }
 
-    /**
-     * Delete the video at the given index.
-     * On Android 11+, this creates a system delete request (user must confirm).
-     * On older versions, directly deletes the file.
-     */
     fun deleteVideo(index: Int) {
         val videos = _videoList.value
         if (index !in videos.indices) return
@@ -380,21 +365,15 @@ class VideoPlayerViewModel(
         val repo = appContext?.let { MediaStoreRepository(it) } ?: return
         val success = repo.deleteVideo(video.uri)
         if (success) {
-            // Check if there's a pending intent (Android 11+)
             val pendingIntent = repo.lastDeleteIntent
             if (pendingIntent != null) {
                 _deleteRequest.value = pendingIntent
             } else {
-                // Direct delete succeeded (Android 10-)
                 removeVideoFromList(index)
             }
         }
     }
 
-    /**
-     * Called after user confirms/rejects the system delete dialog.
-     * If confirmed, remove from local list.
-     */
     fun onDeleteResult(index: Int, confirmed: Boolean) {
         _deleteRequest.value = null
         if (confirmed) {
@@ -408,7 +387,6 @@ class VideoPlayerViewModel(
         videos.removeAt(index)
         _videoList.value = videos
 
-        // Adjust current index
         val currentIdx = _currentIndex.value
         when {
             videos.isEmpty() -> {
@@ -427,9 +405,6 @@ class VideoPlayerViewModel(
         }
     }
 
-    /**
-     * Show heart animation (triggered by double-tap).
-     */
     fun showHeartAnimation() {
         heartDismissJob?.cancel()
         _showHeart.value = true
@@ -442,7 +417,6 @@ class VideoPlayerViewModel(
     private fun updatePlaybackState() {
         exoPlayer?.let {
             val duration = it.duration
-            // duration can be -1 (unset) or C.TIME_UNSET before media is ready
             val safeDuration = if (duration > 0) duration else 0L
             _playbackState.value = PlaybackState(
                 isPlaying = it.isPlaying,
@@ -465,8 +439,6 @@ class VideoPlayerViewModel(
 
     fun setBrightness(value: Float) {
         currentBrightness = value.coerceIn(0f, 1f)
-        // Apply to window - caller must pass window reference
-        // We store it here for the UI to read and apply
     }
 
     fun setVolume(value: Float) {
@@ -478,35 +450,18 @@ class VideoPlayerViewModel(
         }
     }
 
-    fun applyBrightnessToWindow(window: android.view.Window?) {
-        window?.let {
-            val layoutParams = it.attributes
-            layoutParams.screenBrightness = currentBrightness
-            it.attributes = layoutParams
-        }
-    }
-
     private fun loadHistory(context: Context) {
         try {
             val prefs = context.getSharedPreferences("playback_history", Context.MODE_PRIVATE)
             val json = prefs.getString("history", null) ?: return
             val obj = JSONObject(json)
-            val now = System.currentTimeMillis()
-            val maxAge = 30L * 24 * 60 * 60 * 1000 // 30 days
-            var cleaned = false
             obj.keys().forEach { key ->
                 val pos = obj.getLong(key)
-                // Position value is just a millisecond offset — we store timestamps separately
-                // For now, just load all entries. Cleanup happens via videoId staleness.
                 playbackHistory[key.toLong()] = pos
             }
         } catch (_: Exception) {}
     }
 
-    /**
-     * Remove history entries for videos that no longer exist in the library.
-     * Prevents SharedPreferences from growing unbounded.
-     */
     private fun pruneHistory(currentVideoIds: Set<Long>) {
         val keysToRemove = playbackHistory.keys.filter { it !in currentVideoIds }
         keysToRemove.forEach { playbackHistory.remove(it) }
@@ -541,7 +496,6 @@ class VideoPlayerViewModel(
         countDownTimer?.cancel()
         exoPlayer?.release()
         exoPlayer = null
-        // Clean up thumbnail cache files
         appContext?.let { MediaStoreRepository(it).cleanupThumbnailCache() }
     }
 

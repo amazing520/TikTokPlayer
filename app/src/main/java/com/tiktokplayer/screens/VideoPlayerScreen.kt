@@ -7,7 +7,6 @@ import android.view.WindowManager
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,7 +31,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -41,7 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.ui.PlayerView
 import com.tiktokplayer.R
 import com.tiktokplayer.components.PlayerControlsOverlay
@@ -108,7 +106,7 @@ fun VideoPlayerScreen(viewModel: VideoPlayerViewModel) {
         }
     }
 
-    // Apply brightness changes to window — use snapshotFlow to observe non-State property
+    // Apply brightness changes to window
     LaunchedEffect(Unit) {
         snapshotFlow { viewModel.currentBrightness }
             .distinctUntilChanged()
@@ -260,8 +258,6 @@ private fun VideoPager(
                     )
                 }
                 // Vertical drag for brightness (left) / volume (right)
-                // Uses direction detection: only activate after clear vertical intent,
-                // preventing conflict with VerticalPager's page-swipe gesture
                 .pointerInput(isCurrentPage) {
                     if (!isCurrentPage) return@pointerInput
                     detectVerticalDragGesturesWithDirection(
@@ -290,26 +286,31 @@ private fun VideoPager(
                     )
                 }
         ) {
-            // ExoPlayer View — inflate from XML with surface_type="texture_view"
-            // TextureView is more compatible with Compose and avoids black screen on many devices
+            // ExoPlayer View — use AndroidView with proper lifecycle management
             AndroidView(
                 factory = { ctx ->
                     val wrapper = android.widget.FrameLayout(ctx)
                     LayoutInflater.from(ctx).inflate(R.layout.exo_player_view, wrapper, true)
                     val playerView = wrapper.findViewById<PlayerView>(R.id.player_view)
                     playerView.setKeepContentOnPlayerReset(true)
+                    // Disable default controller
+                    playerView.useController = false
                     wrapper
                 },
                 update = { wrapper ->
                     val playerView = wrapper.findViewById<PlayerView>(R.id.player_view)
-                    if (isCurrentPage) {
-                        if (playerView.player !== viewModel.exoPlayer) {
-                            playerView.player = viewModel.exoPlayer
+                    try {
+                        if (isCurrentPage) {
+                            if (playerView.player !== viewModel.exoPlayer) {
+                                playerView.player = viewModel.exoPlayer
+                            }
+                        } else {
+                            if (playerView.player != null) {
+                                playerView.player = null
+                            }
                         }
-                    } else {
-                        if (playerView.player != null) {
-                            playerView.player = null
-                        }
+                    } catch (_: Exception) {
+                        // Guard against race conditions during lifecycle changes
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -325,11 +326,11 @@ private fun VideoPager(
                         .align(Alignment.Center)
                         .background(
                             Color.Black.copy(alpha = 0.6f),
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                            shape = RoundedCornerShape(12.dp)
                         )
                         .padding(horizontal = 24.dp, vertical = 16.dp)
                 ) {
-                    androidx.compose.foundation.layout.Column(
+                    Column(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
@@ -354,7 +355,7 @@ private fun VideoPager(
                         .align(Alignment.Center)
                         .background(
                             Color.Black.copy(alpha = 0.5f),
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                            shape = RoundedCornerShape(12.dp)
                         )
                         .padding(horizontal = 24.dp, vertical = 12.dp)
                 ) {
@@ -380,7 +381,7 @@ private fun VideoPager(
                         .padding(top = 100.dp)
                         .background(
                             Color.Black.copy(alpha = 0.5f),
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(8.dp)
                         )
                         .padding(horizontal = 16.dp, vertical = 6.dp)
                 )
@@ -389,7 +390,7 @@ private fun VideoPager(
             // Video info overlay (bottom-left, always visible)
             val videoItem = videoList.getOrNull(page)
             videoItem?.let { video ->
-                androidx.compose.foundation.layout.Column(
+                Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = 12.dp, bottom = 80.dp)
@@ -518,7 +519,6 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectVe
 ) {
     val threshold = 10f
     awaitPointerEventScope {
-        // Wait for first touch
         val down = awaitPointerEvent().changes.firstOrNull() ?: return@awaitPointerEventScope
         down.consume()
         val startOffset = down.position

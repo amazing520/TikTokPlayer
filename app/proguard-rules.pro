@@ -17,6 +17,12 @@
 # Keep metadata for MediaItem
 -keepclassmembers class androidx.media3.common.MediaItem** { *; }
 
+# Keep PlayerView and its inner classes
+-keep class androidx.media3.ui.PlayerView { *; }
+-keep class androidx.media3.ui.PlayerControlView { *; }
+-keep class androidx.media3.ui.AspectRatioFrameLayout { *; }
+-keep class androidx.media3.ui.SubtitleView { *; }
+
 # === Kotlin Coroutines ===
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
@@ -33,7 +39,17 @@
 -keep class androidx.lifecycle.** { *; }
 -keep class androidx.activity.** { *; }
 
+# === Window Insets ===
+-keep class androidx.core.view.** { *; }
+
 # === Data classes ===
 -keepclassmembers class com.tiktokplayer.data.** { *; }
 -keepclassmembers class com.tiktokplayer.viewmodel.PlaybackState { *; }
 -keepclassmembers class com.tiktokplayer.viewmodel.TimerState { *; }
+
+# === Coil ===
+-keep class coil.** { *; }
+-dontwarn coil.**
+
+# === Android 16 edge-to-edge ===
+-keep class androidx.activity.ComponentActivity { *; }
